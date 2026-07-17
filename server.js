@@ -278,7 +278,11 @@ app.post('/v1/chat/completions', async (req, res) => {
       max_tokens: Math.min(max_tokens ?? 2048, MAX_TOKENS_LIMIT),
       stream: stream || false,
       extra_body: ENABLE_THINKING_MODE
-        ? { chat_template_kwargs: { thinking: true } }
+        ? { 
+            // Broad compatibility for both deepseek-v4-flash and standard vLLM/NIM backends
+            thinking: { type: "enabled" }, 
+            chat_template_kwargs: { thinking: true, reasoning_effort: "high" }
+          }
         : undefined
     };
 

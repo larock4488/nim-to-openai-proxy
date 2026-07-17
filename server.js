@@ -74,20 +74,11 @@ const MODEL_MAPPING = {
   'step-3.7-flash': 'stepfun-ai/step-3.7-flash'
 };
 
-const FALLBACK_MODELS = [
-  'mistralai/mistral-medium-3.5-128b',
-  'mistralai/mistral-small-4-119b-2603',
-  'nvidia/llama-3.3-nemotron-super-49b-v1.5',
-  'google/gemma-4-31b-it'
-];
-
 // ─── Middleware ─────────────────────────────────────────────────────────────
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// FIX: Extract token AFTER "Bearer " prefix, compare only the token
-// Prevents bypass when CLIENT_AUTH_KEY is empty (expected would be "Bearer " which is 7 chars)
 function extractBearerToken(authHeader) {
   if (!authHeader || typeof authHeader !== 'string') return null;
   const parts = authHeader.trim().split(' ');
@@ -136,8 +127,6 @@ app.use((req, res, next) => {
 
 // ─── Validation ─────────────────────────────────────────────────────────────
 
-// FIX: Use lightweight model listing instead of burning inference quota
-// If NIM doesn't support /models, skip validation entirely rather than DDoS-ing yourself
 async function validateModels() {
   if (SKIP_VALIDATION) {
     console.log('[VALIDATION] Skipped (SKIP_VALIDATION=true)');
@@ -210,7 +199,6 @@ async function sendDiscordAlert(invalidModels) {
 
 // ─── Helper: Safe Stream Writing ───────────────────────────────────────────
 
-// FIX: Wrap res.write in try/catch to prevent crashes on closed sockets
 function safeWrite(res, data) {
   try {
     if (!res.writableEnded && !res.destroyed && res.writable) {
@@ -223,39 +211,21 @@ function safeWrite(res, data) {
   return false;
 }
 
-// ─── Helper: Fallback Chain ─────────────────────────────────────────────────
+// ─── Helper: Send NIM Request ──────────────────────────────────────────────
 
-async function callWithFallback(baseRequest, models) {
-  let lastError = null;
-
-  for (const model of models) {
-    try {
-      const res = await axios.post(
-        `${NIM_API_BASE}/chat/completions`,
-        { ...baseRequest, model },
-        {
-          headers: {
-            Authorization: `Bearer ${NIM_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          responseType: baseRequest.stream ? 'stream' : 'json',
-          timeout: REQUEST_TIMEOUT_MS
-        }
-      );
-
-      return { response: res, model };
-
-    } catch (err) {
-      lastError = err;
-      console.warn(
-        `[FALLBACK] Model failed: ${model}`,
-        err.response?.status,
-        err.response?.data?.error?.message || err.message
-      );
+async function callNIMModel(baseRequest, model) {
+  return await axios.post(
+    `${NIM_API_BASE}/chat/completions`,
+    { ...baseRequest, model },
+    {
+      headers: {
+        Authorization: `Bearer ${NIM_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      responseType: baseRequest.stream ? 'stream' : 'json',
+      timeout: REQUEST_TIMEOUT_MS
     }
-  }
-
-  throw lastError || new Error('All models failed');
+  );
 }
 
 // ─── Routes ────────────────────────────────────────────────────────────────
@@ -289,8 +259,17 @@ app.post('/v1/chat/completions', async (req, res) => {
       stream
     } = req.body;
 
-    const primaryModel = MODEL_MAPPING[model] || 'nvidia/llama-3.3-nemotron-super-49b-v1.5';
-    const modelChain = [primaryModel, ...FALLBACK_MODELS];
+    // Reject immediately with a clear error if the model isn't mapped
+    const targetModel = MODEL_MAPPING[model];
+    if (!targetModel) {
+      return res.status(400).json({
+        error: {
+          message: `Model '${model || 'undefined'}' is not supported. Please select an available model.`,
+          type: 'invalid_request_error',
+          code: 400
+        }
+      });
+    }
 
     const baseRequest = {
       messages,
@@ -302,9 +281,9 @@ app.post('/v1/chat/completions', async (req, res) => {
         : undefined
     };
 
-    const { response, model: usedModel } = await callWithFallback(baseRequest, modelChain);
+    const response = await callNIMModel(baseRequest, targetModel);
     upstreamStream = response.data;
-    console.log('[PROXY] Model used:', usedModel);
+    console.log('[PROXY] Model used:', targetModel);
 
     if (stream) {
       res.setHeader('Content-Type', 'text/event-stream');
@@ -367,7 +346,6 @@ app.post('/v1/chat/completions', async (req, res) => {
           safeWrite(res, `data: ${JSON.stringify(data)}\n\n`);
 
         } catch (parseErr) {
-          // FIX: Don't silently swallow—send error to client so they know data was lost
           console.warn('[STREAM] Invalid JSON line:', line.slice(0, 100));
           safeWrite(res, `data: ${JSON.stringify({ 
             error: { 
@@ -441,8 +419,6 @@ app.post('/v1/chat/completions', async (req, res) => {
         cleanup();
       });
 
-      // FIX: Check req.destroyed (Node/Express 5) 
-      // Don't destroy already-finished streams
       req.on('close', () => {
         const clientGone = req.destroyed || !res.writable;
         
@@ -514,14 +490,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       res.end();
     }
 
-    // Clean up upstream stream if we have it
     if (upstreamStream && !upstreamStream.destroyed) {
       upstreamStream.destroy();
     }
   }
 });
 
-// FIX: Express 5 named wildcard — but use proper 404 handler
 app.use((req, res) => {
   res.status(404).json({
     error: {
@@ -538,9 +512,7 @@ app.listen(PORT, () => {
   console.log(`[PROXY] Hybrid proxy running on port ${PORT}`);
   console.log(`[PROXY] Max tokens limit: ${MAX_TOKENS_LIMIT}`);
   
-  // Run validation after server starts, non-blocking
   validateModels().catch(err => {
     console.error('[VALIDATION] Startup check failed:', err.message);
   });
 });
-  

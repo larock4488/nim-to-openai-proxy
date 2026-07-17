@@ -272,17 +272,20 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
     }
 
+    // Check if the current target model is a DeepSeek V4 model
+    const isDeepSeekV4 = targetModel.includes('deepseek-v4');
+
     const baseRequest = {
       messages,
       temperature: temperature ?? 0.7,
       max_tokens: Math.min(max_tokens ?? 2048, MAX_TOKENS_LIMIT),
       stream: stream || false,
-      extra_body: ENABLE_THINKING_MODE
-        ? { 
-            // Broad compatibility for both deepseek-v4-flash and standard vLLM/NIM backends
-            thinking: { type: "enabled" }, 
-            chat_template_kwargs: { thinking: true, reasoning_effort: "high" }
-          }
+      // If thinking mode is ON and it's a DeepSeek V4 model, NVIDIA expects 'reasoning_effort' at the root level.
+      ...(ENABLE_THINKING_MODE && isDeepSeekV4 ? { reasoning_effort: "high" } : {}),
+      
+      // Keep extra_body only for non-DeepSeek models if thinking mode is enabled
+      extra_body: (ENABLE_THINKING_MODE && !isDeepSeekV4)
+        ? { chat_template_kwargs: { thinking: true } }
         : undefined
     };
 

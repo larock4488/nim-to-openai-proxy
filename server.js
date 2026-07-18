@@ -283,17 +283,17 @@ app.post('/v1/chat/completions', async (req, res) => {
       max_tokens: Math.min(max_tokens ?? 2048, MAX_TOKENS_LIMIT),
       stream: stream || false,
       
-      // DeepSeek V4 and GLM-5.2 both accept reasoning_effort at the root level on NIM
+      // Both DeepSeek and GLM accept root-level reasoning_effort on NIM
       ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52) ? { reasoning_effort: "high" } : {}),
       
-      // Model-specific structure for chat_template_kwargs
-      extra_body: ENABLE_THINKING_MODE
-        ? (isGLM52
-            ? { chat_template_kwargs: { enable_thinking: true, clear_thinking: false } }
+      // Pass chat_template_kwargs directly at the root (NIM native format)
+      ...(ENABLE_THINKING_MODE 
+        ? (isGLM52 
+            ? { chat_template_kwargs: { enable_thinking: true, thinking: true } }
             : !isDeepSeekV4 
               ? { chat_template_kwargs: { thinking: true } }
-              : undefined)
-        : undefined
+              : {})
+        : {})
     };
 
     const response = await callNIMModel(baseRequest, targetModel);

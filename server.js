@@ -271,8 +271,11 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
     }
 
-    // Check if the current target model requires root-level reasoning configuration (DeepSeek V4 & GLM 5.2)
-    const isReasoningModel = targetModel.includes('deepseek-v4') || targetModel.includes('glm-5.2');
+    // Check if the current target model is DeepSeek V4
+    const isDeepSeekV4 = targetModel.includes('deepseek-v4');
+    
+    // Check if the current target model is GLM 5.2
+    const isGLM52 = targetModel.includes('glm-5.2');
 
     const baseRequest = {
       messages,
@@ -280,12 +283,16 @@ app.post('/v1/chat/completions', async (req, res) => {
       max_tokens: Math.min(max_tokens ?? 2048, MAX_TOKENS_LIMIT),
       stream: stream || false,
       
-      // If thinking mode is ON and it's a reasoning model, NVIDIA expects 'reasoning_effort' at the root level.
-      ...(ENABLE_THINKING_MODE && isReasoningModel ? { reasoning_effort: "high" } : {}),
+      // DeepSeek V4 and GLM-5.2 both accept reasoning_effort at the root level on NIM
+      ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52) ? { reasoning_effort: "high" } : {}),
       
-      // Keep extra_body only for non-reasoning models if thinking mode is enabled
-      extra_body: (ENABLE_THINKING_MODE && !isReasoningModel)
-        ? { chat_template_kwargs: { thinking: true } }
+      // Model-specific structure for chat_template_kwargs
+      extra_body: ENABLE_THINKING_MODE
+        ? (isGLM52
+            ? { chat_template_kwargs: { enable_thinking: true, clear_thinking: false } }
+            : !isDeepSeekV4 
+              ? { chat_template_kwargs: { thinking: true } }
+              : undefined)
         : undefined
     };
 

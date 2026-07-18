@@ -286,13 +286,11 @@ app.post('/v1/chat/completions', async (req, res) => {
       // Both DeepSeek and GLM accept root-level reasoning_effort on NIM
       ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52) ? { reasoning_effort: "high" } : {}),
       
-      // Pass chat_template_kwargs directly at the root (NIM native format)
+      // Pass chat_template_kwargs uniformly when thinking mode is enabled
       ...(ENABLE_THINKING_MODE 
         ? (isGLM52 
             ? { chat_template_kwargs: { enable_thinking: true, thinking: true } }
-            : !isDeepSeekV4 
-              ? { chat_template_kwargs: { thinking: true } }
-              : {})
+            : { chat_template_kwargs: { thinking: true } }) // Removed the !isDeepSeekV4 bypass
         : {})
     };
 

@@ -271,11 +271,10 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
     }
 
-    // Check if the current target model is DeepSeek V4
+    // Check target models for specialized logging and reasoning behavior
     const isDeepSeekV4 = targetModel.includes('deepseek-v4');
-    
-    // Check if the current target model is GLM 5.2
     const isGLM52 = targetModel.includes('glm-5.2');
+    const isMonitoredModel = isDeepSeekV4 || isGLM52;
 
     const baseRequest = {
       messages,
@@ -283,6 +282,9 @@ app.post('/v1/chat/completions', async (req, res) => {
       max_tokens: Math.min(max_tokens ?? 2048, MAX_TOKENS_LIMIT),
       stream: stream || false,
       
+      // Include usage stats in stream responses
+      ...(stream ? { stream_options: { include_usage: true } } : {}),
+
       // Both DeepSeek and GLM accept root-level reasoning_effort on NIM
       ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52) ? { reasoning_effort: "high" } : {}),
       
@@ -290,7 +292,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       ...(ENABLE_THINKING_MODE 
         ? (isGLM52 
             ? { chat_template_kwargs: { enable_thinking: true, thinking: true } }
-            : { chat_template_kwargs: { thinking: true } }) // Removed the !isDeepSeekV4 bypass
+            : { chat_template_kwargs: { thinking: true } })
         : {})
     };
 
@@ -332,6 +334,15 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         try {
           const data = JSON.parse(line.slice(6));
+
+          // Log token usage for monitored models when usage chunk is emitted
+          if (isMonitoredModel && data.usage) {
+            console.log(`[TOKEN USAGE] Model: ${model} (${targetModel})`);
+            console.log(`  - Prompt Tokens: ${data.usage.prompt_tokens ?? 0}`);
+            console.log(`  - Completion Tokens: ${data.usage.completion_tokens ?? 0}`);
+            console.log(`  - Total Tokens: ${data.usage.total_tokens ?? 0}`);
+          }
+
           const delta = data.choices?.[0]?.delta;
 
           if (delta) {
@@ -447,6 +458,19 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     } else {
       // Non-streaming response
+      const usage = response.data.usage || {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0
+      };
+
+      if (isMonitoredModel) {
+        console.log(`[TOKEN USAGE] Model: ${model} (${targetModel})`);
+        console.log(`  - Prompt Tokens: ${usage.prompt_tokens}`);
+        console.log(`  - Completion Tokens: ${usage.completion_tokens}`);
+        console.log(`  - Total Tokens: ${usage.total_tokens}`);
+      }
+
       const openaiResponse = {
         id: `chatcmpl-${Date.now()}`,
         object: 'chat.completion',
@@ -470,11 +494,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             finish_reason: choice.finish_reason || 'stop'
           };
         }),
-        usage: response.data.usage || {
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 0
-        }
+        usage
       };
 
       res.json(openaiResponse);

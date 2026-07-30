@@ -19,8 +19,6 @@ const CLIENT_AUTH_KEY = process.env.CLIENT_AUTH_KEY;
 
 const SHOW_REASONING = process.env.SHOW_REASONING === 'true';
 const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true';
-const SKIP_VALIDATION = process.env.SKIP_VALIDATION === 'true';
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
 const MAX_TOKENS_LIMIT = 65536;
 const REQUEST_TIMEOUT_MS = 540000;// 9 Minute
@@ -124,78 +122,6 @@ app.use((req, res, next) => {
 
   next();
 });
-
-// ─── Validation ─────────────────────────────────────────────────────────────
-
-async function validateModels() {
-  if (SKIP_VALIDATION) {
-    console.log('[VALIDATION] Skipped (SKIP_VALIDATION=true)');
-    return;
-  }
-
-  console.log('[VALIDATION] Checking model availability via /v1/models...');
-
-  try {
-    const response = await axios.get(`${NIM_API_BASE}/models`, {
-      headers: {
-        Authorization: `Bearer ${NIM_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: VALIDATION_TIMEOUT_MS
-    });
-
-    const availableModels = new Set(
-      (response.data.data || []).map(m => m.id)
-    );
-
-    const invalid = [];
-    
-    for (const [alias, nimId] of Object.entries(MODEL_MAPPING)) {
-      if (availableModels.has(nimId)) {
-        console.log(`[VALIDATION] ✓ ${alias} → ${nimId}`);
-      } else {
-        console.warn(`[VALIDATION] ✗ ${alias} → ${nimId} (not in catalog)`);
-        invalid.push({ alias, nimId, error: 'Model not found in NIM catalog' });
-      }
-    }
-
-    if (invalid.length > 0) {
-      await sendDiscordAlert(invalid);
-    } else {
-      console.log('[VALIDATION] All models valid.');
-    }
-
-  } catch (err) {
-    console.warn(`[VALIDATION] /v1/models endpoint failed: ${err.message}. Skipping validation.`);
-    console.warn('[VALIDATION] Consider setting SKIP_VALIDATION=true if your NIM provider lacks a model listing endpoint.');
-  }
-}
-
-async function sendDiscordAlert(invalidModels) {
-  if (!DISCORD_WEBHOOK_URL) return;
-
-  const embed = {
-    title: '⚠️ NIM Proxy: Model Validation Failed',
-    description: `${invalidModels.length} model(s) failed validation. Check NIM catalog for deprecations.`,
-    color: 0xff4444,
-    timestamp: new Date().toISOString(),
-    fields: invalidModels.map(m => ({
-      name: `\`${m.alias}\``,
-      value: `Backend: \`${m.nimId}\`\nError: \`${m.error}\``,
-      inline: true
-    }))
-  };
-
-  try {
-    await axios.post(DISCORD_WEBHOOK_URL, {
-      embeds: [embed],
-      username: 'NIM Proxy Monitor'
-    }, { timeout: 5000 });
-    console.log('[DISCORD] Alert sent.');
-  } catch (err) {
-    console.error('[DISCORD] Failed to send alert:', err.message);
-  }
-}
 
 // ─── Helper: Safe Stream Writing ───────────────────────────────────────────
 
@@ -544,8 +470,4 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`[PROXY] Hybrid proxy running on port ${PORT}`);
   console.log(`[PROXY] Max tokens limit: ${MAX_TOKENS_LIMIT}`);
-  
-  validateModels().catch(err => {
-    console.error('[VALIDATION] Startup check failed:', err.message);
-  });
 });

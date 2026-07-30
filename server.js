@@ -23,7 +23,7 @@ const SKIP_VALIDATION = process.env.SKIP_VALIDATION === 'true';
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
 const MAX_TOKENS_LIMIT = 65536;
-const REQUEST_TIMEOUT_MS = 360000;
+const REQUEST_TIMEOUT_MS = 540000;// 9 Minute
 const VALIDATION_TIMEOUT_MS = 15000;
 const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
 
@@ -279,7 +279,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     const baseRequest = {
       messages,
       temperature: temperature ?? 0.7,
-      max_tokens: Math.min(max_tokens ?? 4096, MAX_TOKENS_LIMIT),
+      max_tokens: Math.min(max_tokens ?? 0, MAX_TOKENS_LIMIT),
       stream: stream || false,
       
       // Include usage stats in stream responses

@@ -173,6 +173,7 @@ app.get('/v1/models', (req, res) => {
 });
 
 app.post('/v1/chat/completions', async (req, res) => {
+  let startTime = Date.now();
   let streamEndedCleanly = false;
   let upstreamStream = null;
 
@@ -267,6 +268,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             console.log(`  - Prompt Tokens: ${data.usage.prompt_tokens ?? 0}`);
             console.log(`  - Completion Tokens: ${data.usage.completion_tokens ?? 0}`);
             console.log(`  - Total Tokens: ${data.usage.total_tokens ?? 0}`);
+            console.log(`- Total seconds taken ${Math.floor((Date.now() - startTime) / 1000)}`);
           }
 
           const delta = data.choices?.[0]?.delta;
@@ -395,6 +397,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         console.log(`  - Prompt Tokens: ${usage.prompt_tokens}`);
         console.log(`  - Completion Tokens: ${usage.completion_tokens}`);
         console.log(`  - Total Tokens: ${usage.total_tokens}`);
+        console.log(`- Total seconds taken ${Math.floor((Date.now() - startTime) / 1000)}`);
       }
 
       const openaiResponse = {

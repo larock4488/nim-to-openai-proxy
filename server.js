@@ -178,13 +178,8 @@ app.post('/v1/chat/completions', async (req, res) => {
   let upstreamStream = null;
 
   try {
-    const {
-      model,
-      messages,
-      temperature,
-      max_tokens,
-      stream
-    } = req.body;
+    // Destructure model and messages, capture everything else in restBody
+    const { model, messages, temperature, max_tokens, stream, ...restBody } = req.body;
 
     // Reject immediately with a clear error if the model isn't mapped
     const targetModel = MODEL_MAPPING[model];
@@ -204,7 +199,9 @@ app.post('/v1/chat/completions', async (req, res) => {
     const isMonitoredModel = isDeepSeekV4 || isGLM52;
 
     const baseRequest = {
+      ...restBody, // <-- This passes through frequency_penalty, presence_penalty, top_p, tools, seed, etc. automatically!
       messages,
+      model: targetModel, // model goes into the payload body for NIM
       temperature: temperature ?? 0.7,
       max_tokens: Math.min(max_tokens ?? 10000, MAX_TOKENS_LIMIT),
       stream: stream || false,

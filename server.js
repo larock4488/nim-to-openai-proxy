@@ -200,7 +200,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     const isMonitoredModel = isDeepSeekV4 || isGLM52 || isMiniMaxM3;
 
     const baseRequest = {
-      ...restBody, // <-- This passes through frequency_penalty, presence_penalty, top_p, tools, seed, etc. automatically!
+      ...restBody, // Passes frequency_penalty, presence_penalty, top_p, tools, seed, etc. automatically!
       messages,
       model: targetModel, // model goes into the payload body for NIM
       temperature: temperature ?? 0.7,
@@ -213,12 +213,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       // DeepSeek, GLM, and MiniMax accept root-level reasoning_effort on NIM
       ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52 || isMiniMaxM3) ? { reasoning_effort: "medium" } : {}),
       
-      // Pass chat_template_kwargs uniformly when thinking mode is enabled
+      // Pass chat_template_kwargs uniformly with MiniMax-M3 using { type: "enabled" }
       ...(ENABLE_THINKING_MODE 
         ? (isGLM52 
             ? { chat_template_kwargs: { enable_thinking: true, thinking: true } }
             : (isMiniMaxM3 
-                ? { chat_template_kwargs: { thinking: true } } 
+                ? { chat_template_kwargs: { thinking: { type: "enabled" } } } 
                 : { chat_template_kwargs: { thinking: true } }))
         : {})
     };

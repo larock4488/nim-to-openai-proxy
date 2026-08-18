@@ -213,12 +213,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       // Keep root-level reasoning_effort ONLY for models that actually use it (DeepSeek & GLM)
       ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52) ? { reasoning_effort: "medium" } : {}),
       
-      // Pass chat_template_kwargs uniformly with MiniMax-M3 using { type: "enabled" }
+      // Pass chat_template_kwargs for MiniMax-M3 using thinking_mode
       ...(ENABLE_THINKING_MODE 
         ? (isGLM52 
             ? { chat_template_kwargs: { enable_thinking: true, thinking: true } }
             : (isMiniMaxM3 
-                ? { chat_template_kwargs: { thinking: { type: "enabled" } } } 
+                ? { chat_template_kwargs: { thinking_mode: "enabled" } } 
                 : { chat_template_kwargs: { thinking: true } }))
         : {})
     };

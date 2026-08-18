@@ -202,7 +202,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     const baseRequest = {
       ...restBody, // Passes frequency_penalty, presence_penalty, top_p, tools, seed, etc. automatically!
       messages,
-      model: targetModel, // model goes into the payload body for NIM
+      model: targetModel,
       temperature: temperature ?? 0.7,
       max_tokens: Math.min(max_tokens ?? 10000, MAX_TOKENS_LIMIT),
       stream: stream || false,
@@ -210,8 +210,8 @@ app.post('/v1/chat/completions', async (req, res) => {
       // Include usage stats in stream responses
       ...(stream ? { stream_options: { include_usage: true } } : {}),
 
-      // DeepSeek, GLM, and MiniMax accept root-level reasoning_effort on NIM
-      ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52 || isMiniMaxM3) ? { reasoning_effort: "medium" } : {}),
+      // Keep root-level reasoning_effort ONLY for models that actually use it (DeepSeek & GLM)
+      ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52) ? { reasoning_effort: "medium" } : {}),
       
       // Pass chat_template_kwargs uniformly with MiniMax-M3 using { type: "enabled" }
       ...(ENABLE_THINKING_MODE 

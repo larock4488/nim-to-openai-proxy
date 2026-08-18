@@ -196,7 +196,8 @@ app.post('/v1/chat/completions', async (req, res) => {
     // Check target models for specialized logging and reasoning behavior
     const isDeepSeekV4 = targetModel.includes('deepseek-v4');
     const isGLM52 = targetModel.includes('glm-5.2');
-    const isMonitoredModel = isDeepSeekV4 || isGLM52;
+    const isMiniMaxM3 = targetModel.includes('minimax-m3');
+    const isMonitoredModel = isDeepSeekV4 || isGLM52 || isMiniMaxM3;
 
     const baseRequest = {
       ...restBody, // <-- This passes through frequency_penalty, presence_penalty, top_p, tools, seed, etc. automatically!
@@ -209,14 +210,16 @@ app.post('/v1/chat/completions', async (req, res) => {
       // Include usage stats in stream responses
       ...(stream ? { stream_options: { include_usage: true } } : {}),
 
-      // Both DeepSeek and GLM accept root-level reasoning_effort on NIM
-      ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52) ? { reasoning_effort: "high" } : {}),
+      // DeepSeek, GLM, and MiniMax accept root-level reasoning_effort on NIM
+      ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52 || isMiniMaxM3) ? { reasoning_effort: "medium" } : {}),
       
       // Pass chat_template_kwargs uniformly when thinking mode is enabled
       ...(ENABLE_THINKING_MODE 
         ? (isGLM52 
             ? { chat_template_kwargs: { enable_thinking: true, thinking: true } }
-            : { chat_template_kwargs: { thinking: true } })
+            : (isMiniMaxM3 
+                ? { chat_template_kwargs: { thinking: true } } 
+                : { chat_template_kwargs: { thinking: true } }))
         : {})
     };
 

@@ -64,7 +64,7 @@ const MODEL_MAPPING = {
   'llama-3.3-70b-instruct': 'meta/llama-3.3-70b-instruct',
   'dracarys-llama-3.1-70b-instruct': 'abacusai/dracarys-llama-3.1-70b-instruct',
   'nemotron-mini-4b-instruct': 'nvidia/nemotron-mini-4b-instruct',
-  'glm-5.2': 'z-ai/glm-5.2',
+  'glm-5.2': 'z-ai/glm-5.2:free',
   'openrouter/glm-5.2': 'z-ai/glm-5.2', // OpenRouter Mapping added here
   'mistral': 'mistralai/mistral-large-3-675b-instruct-2512',
   'mistral-turbo': 'mistralai/mistral-medium-3.5-128b',

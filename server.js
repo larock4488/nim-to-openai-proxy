@@ -1,4 +1,4 @@
-// server.js — Robust Hybrid OpenAI ↔ NIM Proxy
+// server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
 // Express 5 Compatible
 // Fixes: auth bypass, startup DDoS, silent stream failures, memory leaks, Express 5 deprecations
 
@@ -15,14 +15,17 @@ const PORT = process.env.PORT || 3000;
 
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
+
+const OPENROUTER_API_BASE = process.env.OPENROUTER_API_BASE || 'https://openrouter.ai/api/v1';
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+
 const CLIENT_AUTH_KEY = process.env.CLIENT_AUTH_KEY;
 
 const SHOW_REASONING = process.env.SHOW_REASONING === 'true';
 const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true';
 
 const MAX_TOKENS_LIMIT = 65536;
-const REQUEST_TIMEOUT_MS = 540000;// 9 Minute
-const VALIDATION_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 540000; // 9 Minute
 const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
 
 if (SHOW_REASONING) console.log('[CONFIG] Reasoning display: ENABLED');
@@ -35,6 +38,10 @@ function validateConfig() {
   
   if (!NIM_API_KEY) fatal('NIM_API_KEY is required. Get one at https://build.nvidia.com/');
   
+  if (!OPENROUTER_API_KEY) {
+    console.warn('[WARN] OPENROUTER_API_KEY not set. OpenRouter models will fail.');
+  }
+
   if (!CLIENT_AUTH_KEY) {
     console.warn('[WARN] CLIENT_AUTH_KEY not set. All requests will be rejected with 403.');
   }
@@ -58,6 +65,7 @@ const MODEL_MAPPING = {
   'dracarys-llama-3.1-70b-instruct': 'abacusai/dracarys-llama-3.1-70b-instruct',
   'nemotron-mini-4b-instruct': 'nvidia/nemotron-mini-4b-instruct',
   'glm-5.2': 'z-ai/glm-5.2',
+  'openrouter/glm-5.2': 'z-ai/glm-5.2', // OpenRouter Mapping added here
   'mistral': 'mistralai/mistral-large-3-675b-instruct-2512',
   'mistral-turbo': 'mistralai/mistral-medium-3.5-128b',
   'mistral-pro': 'mistralai/mistral-small-4-119b-2603',
@@ -137,15 +145,15 @@ function safeWrite(res, data) {
   return false;
 }
 
-// ─── Helper: Send NIM Request ──────────────────────────────────────────────
+// ─── Helper: Send Upstream Request ─────────────────────────────────────────
 
-async function callNIMModel(baseRequest, model) {
+async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
   return await axios.post(
-    `${NIM_API_BASE}/chat/completions`,
+    `${apiBase}/chat/completions`,
     { ...baseRequest, model },
     {
       headers: {
-        Authorization: `Bearer ${NIM_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
       responseType: baseRequest.stream ? 'stream' : 'json',
@@ -157,7 +165,7 @@ async function callNIMModel(baseRequest, model) {
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '2.1.0' });
+  res.json({ status: 'ok', version: '2.2.0' });
 });
 
 app.get('/v1/models', (req, res) => {
@@ -167,7 +175,7 @@ app.get('/v1/models', (req, res) => {
       id,
       object: 'model',
       created: Date.now(),
-      owned_by: 'nim-proxy'
+      owned_by: id.startsWith('openrouter') ? 'openrouter' : 'nim-proxy'
     }))
   });
 });
@@ -191,6 +199,27 @@ app.post('/v1/chat/completions', async (req, res) => {
           code: 400
         }
       });
+    }
+
+    // Dynamic routing logic: NIM vs OpenRouter
+    let currentApiBase = NIM_API_BASE;
+    let currentApiKey = NIM_API_KEY;
+    let providerName = 'NIM';
+
+    if (model === 'openrouter/glm-5.2') {
+      currentApiBase = OPENROUTER_API_BASE;
+      currentApiKey = OPENROUTER_API_KEY;
+      providerName = 'OpenRouter';
+
+      if (!currentApiKey) {
+        return res.status(500).json({
+          error: {
+            message: 'OpenRouter API key is not configured on the server.',
+            type: 'server_error',
+            code: 500
+          }
+        });
+      }
     }
 
     // Check target models for specialized logging and reasoning behavior
@@ -223,9 +252,9 @@ app.post('/v1/chat/completions', async (req, res) => {
         : {})
     };
 
-    const response = await callNIMModel(baseRequest, targetModel);
+    const response = await callUpstreamModel(baseRequest, targetModel, currentApiBase, currentApiKey);
     upstreamStream = response.data;
-    console.log('[PROXY] Model used:', targetModel);
+    console.log(`[PROXY] Routed to ${providerName}. Model used: ${targetModel}`);
 
     if (stream) {
       res.setHeader('Content-Type', 'text/event-stream');
@@ -264,7 +293,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
           // Log token usage for monitored models when usage chunk is emitted
           if (isMonitoredModel && data.usage) {
-            console.log(`[TOKEN USAGE] Model: ${model} (${targetModel})`);
+            console.log(`[TOKEN USAGE] Provider: ${providerName} | Model: ${model} (${targetModel})`);
             console.log(`  - Prompt Tokens: ${data.usage.prompt_tokens ?? 0}`);
             console.log(`  - Completion Tokens: ${data.usage.completion_tokens ?? 0}`);
             console.log(`  - Total Tokens: ${data.usage.total_tokens ?? 0}`);
@@ -393,7 +422,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       };
 
       if (isMonitoredModel) {
-        console.log(`[TOKEN USAGE] Model: ${model} (${targetModel})`);
+        console.log(`[TOKEN USAGE] Provider: ${providerName} | Model: ${model} (${targetModel})`);
         console.log(`  - Prompt Tokens: ${usage.prompt_tokens}`);
         console.log(`  - Completion Tokens: ${usage.completion_tokens}`);
         console.log(`  - Total Tokens: ${usage.total_tokens}`);
@@ -431,7 +460,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
   } catch (error) {
     console.error('[PROXY] Fatal error:', error.message);
-    console.error('[PROXY] NIM response:', error.response?.data);
+    console.error('[PROXY] Upstream response:', error.response?.data);
 
     if (!res.headersSent) {
       res.status(error.response?.status || 500).json({

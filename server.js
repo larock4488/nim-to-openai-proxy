@@ -58,6 +58,7 @@ const MODEL_MAPPING = {
   'kimi-k2.6': 'moonshotai/kimi-k2.6',
   'deepseek-v4-pro': 'deepseek-ai/deepseek-v4-pro',
   'deepseek-v4-flash': 'deepseek-ai/deepseek-v4-flash',
+  'deepseek-v4-flash-0731': 'deepseek-ai/deepseek-v4-flash-0731',
   'gpt-oss-120b': 'openai/gpt-oss-120b',
   'gpt-oss-20b': 'openai/gpt-oss-20b',
   'llama-3.3-nemotron-super-49b-v1.5': 'nvidia/llama-3.3-nemotron-super-49b-v1.5',

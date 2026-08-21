@@ -54,31 +54,18 @@ validateConfig();
 const MODEL_MAPPING = {
   'nemotron-3-super-120b-a12b': 'nvidia/nemotron-3-super-120b-a12b',
   'nemotron-3-ultra-550b-a55b': 'nvidia/nemotron-3-ultra-550b-a55b',
-  'qwen3.5-397b-a17b': 'qwen/qwen3.5-397b-a17b',
+  'nemotron-3.5-lightning-30b-a3b': 'nvidia/nemotron-3.5-lightning-30b-a3b',
   'kimi-k2.6': 'moonshotai/kimi-k2.6',
   'deepseek-v4-pro': 'deepseek-ai/deepseek-v4-pro',
   'deepseek-v4-flash': 'deepseek-ai/deepseek-v4-flash',
   'deepseek-v4-flash-0731': 'deepseek-ai/deepseek-v4-flash-0731',
   'gpt-oss-120b': 'openai/gpt-oss-120b',
-  'gpt-oss-20b': 'openai/gpt-oss-20b',
-  'llama-3.3-nemotron-super-49b-v1.5': 'nvidia/llama-3.3-nemotron-super-49b-v1.5',
   'llama-3.3-70b-instruct': 'meta/llama-3.3-70b-instruct',
-  'dracarys-llama-3.1-70b-instruct': 'abacusai/dracarys-llama-3.1-70b-instruct',
-  'nemotron-mini-4b-instruct': 'nvidia/nemotron-mini-4b-instruct',
-  'nemotron-3-ultra-550b-a55b': 'nvidia/nemotron-3-ultra-550b-a55b',
   'glm-5.2': 'z-ai/glm-5.2',
   'openrouter/glm-5.2': 'z-ai/glm-5.2:free', // OpenRouter Mapping added here
-  'mistral': 'mistralai/mistral-large-3-675b-instruct-2512',
-  'mistral-turbo': 'mistralai/mistral-medium-3.5-128b',
-  'mistral-pro': 'mistralai/mistral-small-4-119b-2603',
-  'mistral-nemo': 'mistralai/mistral-nemotron',
-  'mistral-fast': 'mistralai/ministral-14b-instruct-2512',
+  'mistral-nemotron': 'mistralai/mistral-nemotron',
   'gemma-4-31b-it': 'google/gemma-4-31b-it',
-  'gemma-2-2b-it': 'google/gemma-2-2b-it',
-  'gemma-3n-e4b-it': 'google/gemma-3n-e4b-it',
-  'minimax-m2.7': 'minimaxai/minimax-m2.7',
   'minimax-m3': 'minimaxai/minimax-m3',
-  'step-3.5-flash': 'stepfun-ai/step-3.5-flash',
   'step-3.7-flash': 'stepfun-ai/step-3.7-flash'
 };
 

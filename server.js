@@ -55,7 +55,7 @@ const MODEL_MAPPING = {
   'nemotron-3-super-120b-a12b': 'nvidia/nemotron-3-super-120b-a12b',
   'nemotron-3-ultra-550b-a55b': 'nvidia/nemotron-3-ultra-550b-a55b',
   'nemotron-3.5-lightning-30b-a3b': 'nvidia/nemotron-3.5-lightning-30b-a3b',
-  'kimi-k2.6': 'moonshotai/kimi-k2.6',
+  'kimi-k3': 'moonshotai/kimi-k3',
   'deepseek-v4-pro': 'deepseek-ai/deepseek-v4-pro',
   'deepseek-v4-flash': 'deepseek-ai/deepseek-v4-flash',
   'deepseek-v4-flash-0731': 'deepseek-ai/deepseek-v4-flash-0731',

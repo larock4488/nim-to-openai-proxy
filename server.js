@@ -235,7 +235,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       
       // Pass chat_template_kwargs for MiniMax-M3, Kimi-K3, and GLM-5.2
       ...(ENABLE_THINKING_MODE 
-        ? (isGLM52 
+        ? ((isGLM52 || isKimiK3)
             ? { chat_template_kwargs: { enable_thinking: true, thinking: true } }
             : (isMiniMaxM3 
                 ? { chat_template_kwargs: { thinking_mode: "enabled" } } 

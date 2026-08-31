@@ -59,6 +59,7 @@ const MODEL_MAPPING = {
   'deepseek-v4-pro': 'deepseek-ai/deepseek-v4-pro',
   'deepseek-v4-flash': 'deepseek-ai/deepseek-v4-flash',
   'deepseek-v4-flash-0731': 'deepseek-ai/deepseek-v4-flash-0731',
+  'deepseek-v4-pro-0813': 'deepseek-ai/deepseek-v4-pro-0813',
   'gpt-oss-120b': 'openai/gpt-oss-120b',
   'llama-3.3-70b-instruct': 'meta/llama-3.3-70b-instruct',
   'glm-5.2': 'z-ai/glm-5.2',

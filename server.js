@@ -239,9 +239,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             ? { chat_template_kwargs: { enable_thinking: true, thinking: true } }
             : (isMiniMaxM3 
                 ? { chat_template_kwargs: { thinking_mode: "enabled" } } 
-                : (isKimiK3
-                    ? { chat_template_kwargs: { enable_thinking: true } }
-                    : { chat_template_kwargs: { thinking: true } })))
+                : { chat_template_kwargs: { thinking: true } }))
         : {})
     };
 

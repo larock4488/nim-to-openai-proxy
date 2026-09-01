@@ -219,9 +219,21 @@ app.post('/v1/chat/completions', async (req, res) => {
     const isKimiK3 = targetModel.includes('kimi-k3');
     const isMonitoredModel = isDeepSeekV4 || isGLM52 || isMiniMaxM3 || isKimiK3;
 
+    // Strip injected <thinking> blocks from past assistant messages
+    // so they don't confuse the model on subsequent turns
+    const cleanedMessages = messages.map(msg => {
+      if (msg.role === 'assistant' && typeof msg.content === 'string') {
+        return {
+          ...msg,
+          content: msg.content.replace(/<thinking>[\s\S]*?<\/thinking>\n*/g, '').trim()
+        };
+      }
+      return msg;
+    });
+
     const baseRequest = {
-      ...restBody, // Passes frequency_penalty, presence_penalty, top_p, tools, seed, etc. automatically!
-      messages,
+      ...restBody,
+      messages: cleanedMessages, // Use the cleaned messages here
       model: targetModel,
       temperature: temperature ?? 0.7,
       max_tokens: Math.min(max_tokens ?? 10000, MAX_TOKENS_LIMIT),

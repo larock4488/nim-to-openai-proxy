@@ -230,12 +230,16 @@ app.post('/v1/chat/completions', async (req, res) => {
       // Include usage stats in stream responses
       ...(stream ? { stream_options: { include_usage: true } } : {}),
 
-      // Keep root-level reasoning_effort ONLY for models that actually use it (DeepSeek & GLM)
-      ...(ENABLE_THINKING_MODE && (isDeepSeekV4 || isGLM52) ? { reasoning_effort: "medium" } : {}),
+      // Keep root-level reasoning_effort for models that actually use it
+      ...(ENABLE_THINKING_MODE ? (
+        isKimiK3 ? { reasoning_effort: "high" } :
+        (isDeepSeekV4 || isGLM52) ? { reasoning_effort: "medium" } :
+        {}
+      ) : {}),
       
       // Pass chat_template_kwargs for MiniMax-M3, Kimi-K3, and GLM-5.2
       ...(ENABLE_THINKING_MODE 
-        ? ((isGLM52 || isKimiK3)
+        ? (isGLM52
             ? { chat_template_kwargs: { enable_thinking: true, thinking: true } }
             : (isMiniMaxM3 
                 ? { chat_template_kwargs: { thinking_mode: "enabled" } } 

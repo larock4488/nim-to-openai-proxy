@@ -63,7 +63,8 @@ const MODEL_MAPPING = {
   'gpt-oss-120b': 'openai/gpt-oss-120b',
   'llama-3.3-70b-instruct': 'meta/llama-3.3-70b-instruct',
   'glm-5.2': 'z-ai/glm-5.2',
-  'openrouter/glm-5.2': 'z-ai/glm-5.2:free', // OpenRouter Mapping added here
+  'openrouter/glm-5.2': 'z-ai/glm-5.2:free',
+  'openrouter/minimax-m3': 'minimax/minimax-m3:free',
   'mistral-nemotron': 'mistralai/mistral-nemotron',
   'gemma-4-31b-it': 'google/gemma-4-31b-it',
   'minimax-m3': 'minimaxai/minimax-m3',

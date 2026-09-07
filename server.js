@@ -1,6 +1,6 @@
 // server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
 // Express 5 Compatible
-// Fixes: auth bypass, startup DDoS, silent stream failures, memory leaks, Express 5 deprecations
+// Fixes: OpenRouter reasoning field extraction, auth bypass, stream handling
 
 const express = require('express');
 const cors = require('cors');
@@ -145,7 +145,10 @@ async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
     {
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        // OpenRouter specific recommended headers
+        'HTTP-Referer': 'https://github.com/janitorai/proxy',
+        'X-Title': 'JanitorAI Proxy'
       },
       responseType: baseRequest.stream ? 'stream' : 'json',
       timeout: REQUEST_TIMEOUT_MS
@@ -156,7 +159,7 @@ async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '2.2.1' });
+  res.json({ status: 'ok', version: '2.2.2' });
 });
 
 app.get('/v1/models', (req, res) => {
@@ -177,26 +180,23 @@ app.post('/v1/chat/completions', async (req, res) => {
   let upstreamStream = null;
 
   try {
-    // We explicitly extract chat_template_kwargs so it doesn't bleed into OpenRouter
     const { model, messages, temperature, max_tokens, stream, chat_template_kwargs, ...restBody } = req.body;
 
     const targetModel = MODEL_MAPPING[model];
     if (!targetModel) {
       return res.status(400).json({
         error: {
-          message: `Model '${model || 'undefined'}' is not supported. Please select an available model.`,
+          message: `Model '${model || 'undefined'}' is not supported.`,
           type: 'invalid_request_error',
           code: 400
         }
       });
     }
 
-    // Dynamic routing logic: NIM vs OpenRouter
     let currentApiBase = NIM_API_BASE;
     let currentApiKey = NIM_API_KEY;
     let providerName = 'NIM';
 
-    // Fix: Route to OpenRouter dynamically based on model prefix/namespace
     const isExplicitOpenRouter = model.startsWith('openrouter/');
     const isKnownOpenRouterModel = targetModel && (
       targetModel.startsWith('minimax/') ||
@@ -216,7 +216,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       if (!currentApiKey) {
         return res.status(500).json({
           error: {
-            message: 'OpenRouter API key is not configured on the server.',
+            message: 'OpenRouter API key is not configured.',
             type: 'server_error',
             code: 500
           }
@@ -224,7 +224,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       }
     }
 
-    const isDeepSeekV4 = targetModel.includes('deepseek-v4');
+    const isDeepSeekV4 = targetModel.includes('deepseek-v4') || targetModel.includes('deepseek-r1');
     const isGLM52 = targetModel.includes('glm-5.2');
     const isMiniMaxM3 = targetModel.includes('minimax-m3');
     const isKimiK3 = targetModel.includes('kimi-k3');
@@ -250,23 +250,26 @@ app.post('/v1/chat/completions', async (req, res) => {
       ...(stream ? { stream_options: { include_usage: true } } : {})
     };
 
-    // Safely apply standard reasoning params based on model
     if (ENABLE_THINKING_MODE) {
       if (isKimiK3) baseRequest.reasoning_effort = "high";
       else if (isDeepSeekV4 || isGLM52) baseRequest.reasoning_effort = "medium";
     }
 
-    // Fix: ONLY pass `chat_template_kwargs` to Nvidia NIM. 
-    // OpenRouter rejects this specific parameter.
-    if (ENABLE_THINKING_MODE && providerName === 'NIM') {
-      if (isGLM52) {
-        baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
-      } else if (isMiniMaxM3) {
-        baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };
-      } else if (isKimiK3) {
-        baseRequest.chat_template_kwargs = { enable_thinking: true };
-      } else {
-        baseRequest.chat_template_kwargs = { thinking: true };
+    // Pass the correct reasoning triggers based on the provider
+    if (ENABLE_THINKING_MODE) {
+      if (providerName === 'NIM') {
+        if (isGLM52) {
+          baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
+        } else if (isMiniMaxM3) {
+          baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };
+        } else if (isKimiK3) {
+          baseRequest.chat_template_kwargs = { enable_thinking: true };
+        } else {
+          baseRequest.chat_template_kwargs = { thinking: true };
+        }
+      } else if (providerName === 'OpenRouter') {
+        // OpenRouter's top-level flag to enforce reasoning blocks
+        baseRequest.include_reasoning = true;
       }
     }
 
@@ -321,7 +324,9 @@ app.post('/v1/chat/completions', async (req, res) => {
 
           if (delta) {
             let content = delta.content || '';
-            const reasoning = delta.reasoning_content;
+            
+            // FIX: Check for BOTH NIM's format (reasoning_content) AND OpenRouter's format (reasoning)
+            const reasoning = delta.reasoning_content || delta.reasoning;
 
             if (SHOW_REASONING) {
               if (reasoning && !reasoningOpen) {
@@ -338,20 +343,16 @@ app.post('/v1/chat/completions', async (req, res) => {
             }
 
             delta.content = content;
+            
+            // Delete both potential keys so they don't leak downstream to clients that crash on unknown fields
             delete delta.reasoning_content;
+            delete delta.reasoning;
           }
 
           safeWrite(res, `data: ${JSON.stringify(data)}\n\n`);
 
         } catch (parseErr) {
           console.warn('[STREAM] Invalid JSON line:', line.slice(0, 100));
-          safeWrite(res, `data: ${JSON.stringify({ 
-            error: { 
-              message: 'Upstream sent malformed chunk', 
-              type: 'stream_parse_error',
-              details: line.slice(0, 100)
-            } 
-          })}\n\n`);
         }
       };
 
@@ -360,12 +361,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         if (buffer.length > MAX_BUFFER_SIZE) {
           console.error('[STREAM] Buffer overflow, destroying connection');
-          safeWrite(res, `data: ${JSON.stringify({ 
-            error: { 
-              message: 'Stream buffer overflow', 
-              type: 'stream_error' 
-            } 
-          })}\n\n`);
+          safeWrite(res, `data: ${JSON.stringify({ error: { message: 'Stream buffer overflow', type: 'stream_error' } })}\n\n`);
           safeWrite(res, 'data: [DONE]\n\n');
           res.end();
           upstreamStream.destroy();
@@ -383,34 +379,22 @@ app.post('/v1/chat/completions', async (req, res) => {
 
       upstreamStream.on('end', () => {
         buffer += decoder.end();
-
         if (buffer.trim()) {
           for (const line of buffer.split('\n')) {
             processLine(line);
           }
         }
 
-        if (!doneSent) {
-          safeWrite(res, 'data: [DONE]\n\n');
-        }
-
+        if (!doneSent) { safeWrite(res, 'data: [DONE]\n\n'); }
         streamEndedCleanly = true;
-        if (!res.writableEnded) {
-          res.end();
-        }
+        if (!res.writableEnded) res.end();
         cleanup();
       });
 
       upstreamStream.on('error', err => {
         console.error('[STREAM] Upstream error:', err.message);
-        
         if (!res.writableEnded) {
-          safeWrite(res, `data: ${JSON.stringify({
-            error: {
-              message: 'Stream interrupted by upstream error',
-              type: 'stream_error'
-            }
-          })}\n\n`);
+          safeWrite(res, `data: ${JSON.stringify({ error: { message: 'Stream interrupted', type: 'stream_error' } })}\n\n`);
           safeWrite(res, 'data: [DONE]\n\n');
           res.end();
         }
@@ -418,12 +402,9 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
 
       req.on('close', () => {
-        const clientGone = req.destroyed || !res.writable;
-        
-        if (!streamEndedCleanly && clientGone) {
+        if (!streamEndedCleanly && (req.destroyed || !res.writable)) {
           console.warn('[STREAM] Client disconnected prematurely');
         }
-
         if (upstreamStream && !upstreamStream.destroyed && !streamEndedCleanly) {
           upstreamStream.destroy();
         }
@@ -431,18 +412,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
 
     } else {
-      const usage = response.data.usage || {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0
-      };
+      const usage = response.data.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
       if (isMonitoredModel) {
         console.log(`[TOKEN USAGE] Provider: ${providerName} | Model: ${model} (${targetModel})`);
         console.log(`  - Prompt Tokens: ${usage.prompt_tokens}`);
         console.log(`  - Completion Tokens: ${usage.completion_tokens}`);
-        console.log(`  - Total Tokens: ${usage.total_tokens}`);
-        console.log(`- Total seconds taken ${Math.floor((Date.now() - startTime) / 1000)}`);
       }
 
       const openaiResponse = {
@@ -452,19 +427,23 @@ app.post('/v1/chat/completions', async (req, res) => {
         model: model,
         choices: (response.data.choices || []).map((choice, i) => {
           let content = choice.message?.content || '';
+          
+          // FIX: Non-streaming check for both NIM and OpenRouter formats
+          const reasoning = choice.message?.reasoning_content || choice.message?.reasoning;
 
-          if (SHOW_REASONING && choice.message?.reasoning_content) {
-            const safeReasoning = choice.message.reasoning_content.replace(/\n/g, '\\n');
+          if (SHOW_REASONING && reasoning) {
+            const safeReasoning = reasoning.replace(/\n/g, '\\n');
             content = `<thinking>\n${safeReasoning}\n</thinking>\n\n${content}`;
+          }
+          
+          if (choice.message) {
+             delete choice.message.reasoning_content;
+             delete choice.message.reasoning;
           }
 
           return {
             index: i,
-            message: {
-              role: choice.message?.role || 'assistant',
-              content,
-              tool_calls: choice.message?.tool_calls
-            },
+            message: { role: choice.message?.role || 'assistant', content, tool_calls: choice.message?.tool_calls },
             finish_reason: choice.finish_reason || 'stop'
           };
         }),
@@ -476,46 +455,23 @@ app.post('/v1/chat/completions', async (req, res) => {
 
   } catch (error) {
     console.error('[PROXY] Fatal error:', error.message);
-    console.error('[PROXY] Upstream response:', error.response?.data);
-
     if (!res.headersSent) {
       res.status(error.response?.status || 500).json({
-        error: {
-          message: error.message,
-          type: 'invalid_request_error',
-          code: error.response?.status || 500
-        }
+        error: { message: error.message, type: 'invalid_request_error', code: error.response?.status || 500 }
       });
     } else if (!res.writableEnded) {
-      safeWrite(res, `data: ${JSON.stringify({
-        error: {
-          message: error.message,
-          type: 'proxy_error'
-        }
-      })}\n\n`);
+      safeWrite(res, `data: ${JSON.stringify({ error: { message: error.message, type: 'proxy_error' } })}\n\n`);
       safeWrite(res, 'data: [DONE]\n\n');
       res.end();
     }
-
-    if (upstreamStream && !upstreamStream.destroyed) {
-      upstreamStream.destroy();
-    }
+    if (upstreamStream && !upstreamStream.destroyed) upstreamStream.destroy();
   }
 });
 
 app.use((req, res) => {
-  res.status(404).json({
-    error: {
-      message: `Endpoint ${req.method} ${req.path} not found`,
-      type: 'invalid_request_error',
-      code: 404
-    }
-  });
+  res.status(404).json({ error: { message: `Endpoint ${req.method} ${req.path} not found`, type: 'invalid_request_error', code: 404 } });
 });
-
-// ─── Startup ───────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`[PROXY] Hybrid proxy running on port ${PORT}`);
-  console.log(`[PROXY] Max tokens limit: ${MAX_TOKENS_LIMIT}`);
 });

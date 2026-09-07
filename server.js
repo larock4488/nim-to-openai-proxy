@@ -267,7 +267,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         }
       } else if (providerName === 'OpenRouter') {
         // Tells OpenRouter to output reasoning tokens for supported models
-        baseRequest.include_reasoning = true;
+        baseRequest.reasoning = { enabled: true };
       }
     }
 

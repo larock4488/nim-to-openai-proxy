@@ -145,9 +145,7 @@ async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
     {
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://github.com/janitorai/proxy',
-        'X-Title': 'JanitorAI Proxy'
+        'Content-Type': 'application/json'
       },
       responseType: baseRequest.stream ? 'stream' : 'json',
       timeout: REQUEST_TIMEOUT_MS

@@ -156,7 +156,7 @@ async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '2.2.0' });
+  res.json({ status: 'ok', version: '2.2.1' });
 });
 
 app.get('/v1/models', (req, res) => {
@@ -177,10 +177,9 @@ app.post('/v1/chat/completions', async (req, res) => {
   let upstreamStream = null;
 
   try {
-    // Destructure model and messages, capture everything else in restBody
-    const { model, messages, temperature, max_tokens, stream, ...restBody } = req.body;
+    // We explicitly extract chat_template_kwargs so it doesn't bleed into OpenRouter
+    const { model, messages, temperature, max_tokens, stream, chat_template_kwargs, ...restBody } = req.body;
 
-    // Reject immediately with a clear error if the model isn't mapped
     const targetModel = MODEL_MAPPING[model];
     if (!targetModel) {
       return res.status(400).json({
@@ -197,7 +196,19 @@ app.post('/v1/chat/completions', async (req, res) => {
     let currentApiKey = NIM_API_KEY;
     let providerName = 'NIM';
 
-    if (model === 'openrouter/glm-5.2') {
+    // Fix: Route to OpenRouter dynamically based on model prefix/namespace
+    const isExplicitOpenRouter = model.startsWith('openrouter/');
+    const isKnownOpenRouterModel = targetModel && (
+      targetModel.startsWith('minimax/') ||
+      targetModel.startsWith('minimaxai/') ||
+      targetModel.startsWith('deepseek-ai/') ||
+      targetModel.startsWith('moonshotai/') ||
+      targetModel.startsWith('z-ai/') ||
+      targetModel.startsWith('openai/') ||
+      targetModel.startsWith('stepfun-ai/')
+    );
+
+    if (isExplicitOpenRouter || isKnownOpenRouterModel) {
       currentApiBase = OPENROUTER_API_BASE;
       currentApiKey = OPENROUTER_API_KEY;
       providerName = 'OpenRouter';
@@ -213,15 +224,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       }
     }
 
-    // Check target models for specialized logging and reasoning behavior
     const isDeepSeekV4 = targetModel.includes('deepseek-v4');
     const isGLM52 = targetModel.includes('glm-5.2');
     const isMiniMaxM3 = targetModel.includes('minimax-m3');
     const isKimiK3 = targetModel.includes('kimi-k3');
     const isMonitoredModel = isDeepSeekV4 || isGLM52 || isMiniMaxM3 || isKimiK3;
 
-    // Strip injected <thinking> blocks from past assistant messages
-    // so they don't confuse the model on subsequent turns
     const cleanedMessages = messages.map(msg => {
       if (msg.role === 'assistant' && typeof msg.content === 'string') {
         return {
@@ -234,33 +242,33 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     const baseRequest = {
       ...restBody,
-      messages: cleanedMessages, // Use the cleaned messages here
+      messages: cleanedMessages,
       model: targetModel,
       temperature: temperature ?? 0.7,
       max_tokens: Math.min(max_tokens ?? 10000, MAX_TOKENS_LIMIT),
       stream: stream || false,
-      
-      // Include usage stats in stream responses
-      ...(stream ? { stream_options: { include_usage: true } } : {}),
-
-      // Keep root-level reasoning_effort for models that actually use it
-      ...(ENABLE_THINKING_MODE ? (
-        isKimiK3 ? { reasoning_effort: "high" } :
-        (isDeepSeekV4 || isGLM52) ? { reasoning_effort: "medium" } :
-        {}
-      ) : {}),
-      
-      // Pass chat_template_kwargs for MiniMax-M3, Kimi-K3, and GLM-5.2
-      ...(ENABLE_THINKING_MODE 
-        ? (isGLM52
-            ? { chat_template_kwargs: { enable_thinking: true, thinking: true } }
-            : (isMiniMaxM3 
-                ? { chat_template_kwargs: { thinking_mode: "enabled" } } 
-                : (isKimiK3
-                    ? { chat_template_kwargs: { enable_thinking: true } }
-                    : { chat_template_kwargs: { thinking: true } })))
-        : {})
+      ...(stream ? { stream_options: { include_usage: true } } : {})
     };
+
+    // Safely apply standard reasoning params based on model
+    if (ENABLE_THINKING_MODE) {
+      if (isKimiK3) baseRequest.reasoning_effort = "high";
+      else if (isDeepSeekV4 || isGLM52) baseRequest.reasoning_effort = "medium";
+    }
+
+    // Fix: ONLY pass `chat_template_kwargs` to Nvidia NIM. 
+    // OpenRouter rejects this specific parameter.
+    if (ENABLE_THINKING_MODE && providerName === 'NIM') {
+      if (isGLM52) {
+        baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
+      } else if (isMiniMaxM3) {
+        baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };
+      } else if (isKimiK3) {
+        baseRequest.chat_template_kwargs = { enable_thinking: true };
+      } else {
+        baseRequest.chat_template_kwargs = { thinking: true };
+      }
+    }
 
     const response = await callUpstreamModel(baseRequest, targetModel, currentApiBase, currentApiKey);
     upstreamStream = response.data;
@@ -301,7 +309,6 @@ app.post('/v1/chat/completions', async (req, res) => {
         try {
           const data = JSON.parse(line.slice(6));
 
-          // Log token usage for monitored models when usage chunk is emitted
           if (isMonitoredModel && data.usage) {
             console.log(`[TOKEN USAGE] Provider: ${providerName} | Model: ${model} (${targetModel})`);
             console.log(`  - Prompt Tokens: ${data.usage.prompt_tokens ?? 0}`);
@@ -424,7 +431,6 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
 
     } else {
-      // Non-streaming response
       const usage = response.data.usage || {
         prompt_tokens: 0,
         completion_tokens: 0,

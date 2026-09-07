@@ -1,6 +1,6 @@
 // server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
 // Express 5 Compatible
-// Fixes: OpenRouter reasoning field extraction, auth bypass, stream handling
+// Fixes: OpenRouter reasoning parsing (reasoning, reasoning_content, reasoning_details), auth bypass
 
 const express = require('express');
 const cors = require('cors');
@@ -146,7 +146,6 @@ async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        // OpenRouter specific recommended headers
         'HTTP-Referer': 'https://github.com/janitorai/proxy',
         'X-Title': 'JanitorAI Proxy'
       },
@@ -159,7 +158,7 @@ async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '2.2.2' });
+  res.json({ status: 'ok', version: '2.2.3' });
 });
 
 app.get('/v1/models', (req, res) => {
@@ -180,6 +179,7 @@ app.post('/v1/chat/completions', async (req, res) => {
   let upstreamStream = null;
 
   try {
+    // Note: ...restBody safely packs user settings like temperature, top_p, etc.
     const { model, messages, temperature, max_tokens, stream, chat_template_kwargs, ...restBody } = req.body;
 
     const targetModel = MODEL_MAPPING[model];
@@ -240,6 +240,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       return msg;
     });
 
+    // baseRequest combines user settings from restBody with required proxy defaults
     const baseRequest = {
       ...restBody,
       messages: cleanedMessages,
@@ -251,13 +252,10 @@ app.post('/v1/chat/completions', async (req, res) => {
     };
 
     if (ENABLE_THINKING_MODE) {
-      if (isKimiK3) baseRequest.reasoning_effort = "high";
-      else if (isDeepSeekV4 || isGLM52) baseRequest.reasoning_effort = "medium";
-    }
-
-    // Pass the correct reasoning triggers based on the provider
-    if (ENABLE_THINKING_MODE) {
       if (providerName === 'NIM') {
+        if (isKimiK3) baseRequest.reasoning_effort = "high";
+        else if (isDeepSeekV4 || isGLM52) baseRequest.reasoning_effort = "medium";
+
         if (isGLM52) {
           baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
         } else if (isMiniMaxM3) {
@@ -268,7 +266,7 @@ app.post('/v1/chat/completions', async (req, res) => {
           baseRequest.chat_template_kwargs = { thinking: true };
         }
       } else if (providerName === 'OpenRouter') {
-        // OpenRouter's top-level flag to enforce reasoning blocks
+        // Tells OpenRouter to output reasoning tokens for supported models
         baseRequest.include_reasoning = true;
       }
     }
@@ -325,8 +323,11 @@ app.post('/v1/chat/completions', async (req, res) => {
           if (delta) {
             let content = delta.content || '';
             
-            // FIX: Check for BOTH NIM's format (reasoning_content) AND OpenRouter's format (reasoning)
-            const reasoning = delta.reasoning_content || delta.reasoning;
+            // Universal reasoning extraction: checks reasoning_content, reasoning, and reasoning_details array
+            let reasoning = delta.reasoning_content || delta.reasoning;
+            if (!reasoning && delta.reasoning_details && Array.isArray(delta.reasoning_details)) {
+              reasoning = delta.reasoning_details.map(d => d.text || d.summary || '').join('');
+            }
 
             if (SHOW_REASONING) {
               if (reasoning && !reasoningOpen) {
@@ -344,9 +345,10 @@ app.post('/v1/chat/completions', async (req, res) => {
 
             delta.content = content;
             
-            // Delete both potential keys so they don't leak downstream to clients that crash on unknown fields
+            // Clean up all possible upstream reasoning fields
             delete delta.reasoning_content;
             delete delta.reasoning;
+            delete delta.reasoning_details;
           }
 
           safeWrite(res, `data: ${JSON.stringify(data)}\n\n`);
@@ -428,8 +430,10 @@ app.post('/v1/chat/completions', async (req, res) => {
         choices: (response.data.choices || []).map((choice, i) => {
           let content = choice.message?.content || '';
           
-          // FIX: Non-streaming check for both NIM and OpenRouter formats
-          const reasoning = choice.message?.reasoning_content || choice.message?.reasoning;
+          let reasoning = choice.message?.reasoning_content || choice.message?.reasoning;
+          if (!reasoning && choice.message?.reasoning_details && Array.isArray(choice.message.reasoning_details)) {
+            reasoning = choice.message.reasoning_details.map(d => d.text || d.summary || '').join('');
+          }
 
           if (SHOW_REASONING && reasoning) {
             const safeReasoning = reasoning.replace(/\n/g, '\\n');
@@ -439,6 +443,7 @@ app.post('/v1/chat/completions', async (req, res) => {
           if (choice.message) {
              delete choice.message.reasoning_content;
              delete choice.message.reasoning;
+             delete choice.message.reasoning_details;
           }
 
           return {

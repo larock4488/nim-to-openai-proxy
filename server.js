@@ -1,4 +1,4 @@
-c// server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
+// server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
 // Express 5 Compatible
 // Fixes: OpenRouter reasoning parsing (reasoning, reasoning_content, reasoning_details), auth bypass
 

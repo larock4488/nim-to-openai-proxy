@@ -1,4 +1,4 @@
-// server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
+c// server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
 // Express 5 Compatible
 // Fixes: OpenRouter reasoning parsing (reasoning, reasoning_content, reasoning_details), auth bypass
 
@@ -315,37 +315,35 @@ app.post('/v1/chat/completions', async (req, res) => {
             console.log(`  - Prompt Tokens: ${data.usage.prompt_tokens ?? 0}`);
             console.log(`  - Completion Tokens: ${data.usage.completion_tokens ?? 0}`);
             console.log(`  - Total Tokens: ${data.usage.total_tokens ?? 0}`);
-            console.log(`- Total seconds taken ${Math.floor((Date.now() - startTime) / 1000)}`);
           }
 
           const delta = data.choices?.[0]?.delta;
 
           if (delta) {
-            let content = delta.content || '';
-            
-            // Universal reasoning extraction: checks reasoning_content, reasoning, and reasoning_details array
-            let reasoning = delta.reasoning_content || delta.reasoning;
-            if (!reasoning && delta.reasoning_details && Array.isArray(delta.reasoning_details)) {
-              reasoning = delta.reasoning_details.map(d => d.text || d.summary || '').join('');
+            // Extract reasoning from any provider format
+            let chunkReasoning = delta.reasoning_content || delta.reasoning;
+            if (!chunkReasoning && delta.reasoning_details && Array.isArray(delta.reasoning_details)) {
+              chunkReasoning = delta.reasoning_details.map(d => d.text || d.summary || '').join('');
             }
 
-            if (SHOW_REASONING) {
-              if (reasoning && !reasoningOpen) {
-                content = `<thinking>\n${reasoning.replace(/\n/g, '\\n')}`;
-                reasoningOpen = true;
-              } else if (reasoning) {
-                content = reasoning.replace(/\n/g, '\\n');
-              }
+            let content = delta.content || '';
 
-              if (delta.content && reasoningOpen) {
-                content += `\n</thinking>\n\n${delta.content}`;
-                reasoningOpen = false;
+            if (SHOW_REASONING && chunkReasoning) {
+              if (!reasoningOpen) {
+                content = `<thinking>\n${chunkReasoning}`;
+                reasoningOpen = true;
+              } else {
+                content = chunkReasoning;
               }
+            } else if (SHOW_REASONING && reasoningOpen && !chunkReasoning) {
+              // Reasoning has finished, close the tag and append normal content
+              content = `\n</thinking>\n\n${content}`;
+              reasoningOpen = false;
             }
 
             delta.content = content;
             
-            // Clean up all possible upstream reasoning fields
+            // Clean up upstream fields so clients don't crash on unhandled keys
             delete delta.reasoning_content;
             delete delta.reasoning;
             delete delta.reasoning_details;

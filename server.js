@@ -196,17 +196,8 @@ app.post('/v1/chat/completions', async (req, res) => {
     let providerName = 'NIM';
 
     const isExplicitOpenRouter = model.startsWith('openrouter/');
-    const isKnownOpenRouterModel = targetModel && (
-      targetModel.startsWith('minimax/') ||
-      targetModel.startsWith('minimaxai/') ||
-      targetModel.startsWith('deepseek-ai/') ||
-      targetModel.startsWith('moonshotai/') ||
-      targetModel.startsWith('z-ai/') ||
-      targetModel.startsWith('openai/') ||
-      targetModel.startsWith('stepfun-ai/')
-    );
 
-    if (isExplicitOpenRouter || isKnownOpenRouterModel) {
+    if (isExplicitOpenRouter) {
       currentApiBase = OPENROUTER_API_BASE;
       currentApiKey = OPENROUTER_API_KEY;
       providerName = 'OpenRouter';

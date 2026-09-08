@@ -242,15 +242,14 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     if (ENABLE_THINKING_MODE) {
       if (providerName === 'NIM') {
-        if (isKimiK3) baseRequest.reasoning_effort = "high";
-        else if (isDeepSeekV4 || isGLM52) baseRequest.reasoning_effort = "medium";
+        if (isDeepSeekV4 || isGLM52) baseRequest.reasoning_effort = "medium";
 
         if (isGLM52) {
           baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
         } else if (isMiniMaxM3) {
           baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };
         } else if (isKimiK3) {
-          baseRequest.chat_template_kwargs = { enable_thinking: true };
+          baseRequest.chat_template_kwargs = {"thinking":True, "clear_thinking":True, "do_sample":True, "enable_thinking":True, "reasoning_effort":"high"}
         } else {
           baseRequest.chat_template_kwargs = { thinking: true };
         }

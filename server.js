@@ -1,6 +1,6 @@
 // server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
 // Express 5 Compatible
-// Fixes: OpenRouter reasoning parsing & conditional thinking flags for NIM
+// Fixes: Full OpenRouter model prefix routing + working NIM thinking layout
 
 const express = require('express');
 const cors = require('cors');
@@ -25,7 +25,7 @@ const SHOW_REASONING = process.env.SHOW_REASONING === 'true';
 const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true';
 
 const MAX_TOKENS_LIMIT = 65536;
-const REQUEST_TIMEOUT_MS = 540000; // 9 Minutes
+const REQUEST_TIMEOUT_MS = 540000; // 9 Minute
 const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
 
 if (SHOW_REASONING) console.log('[CONFIG] Reasoning display: ENABLED');
@@ -156,7 +156,7 @@ async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '2.2.4' });
+  res.json({ status: 'ok', version: '2.2.1' });
 });
 
 app.get('/v1/models', (req, res) => {
@@ -177,19 +177,20 @@ app.post('/v1/chat/completions', async (req, res) => {
   let upstreamStream = null;
 
   try {
-    const { model, messages, temperature, max_tokens, stream, chat_template_kwargs, ...restBody } = req.body;
+    const { model, messages, temperature, max_tokens, stream, ...restBody } = req.body;
 
     const targetModel = MODEL_MAPPING[model];
     if (!targetModel) {
       return res.status(400).json({
         error: {
-          message: `Model '${model || 'undefined'}' is not supported.`,
+          message: `Model '${model || 'undefined'}' is not supported. Please select an available model.`,
           type: 'invalid_request_error',
           code: 400
         }
       });
     }
 
+    // Dynamic routing logic: NIM vs OpenRouter (Fixed to catch all openrouter prefixes)
     let currentApiBase = NIM_API_BASE;
     let currentApiKey = NIM_API_KEY;
     let providerName = 'NIM';
@@ -213,7 +214,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       if (!currentApiKey) {
         return res.status(500).json({
           error: {
-            message: 'OpenRouter API key is not configured.',
+            message: 'OpenRouter API key is not configured on the server.',
             type: 'server_error',
             code: 500
           }
@@ -221,7 +222,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       }
     }
 
-    const isDeepSeekV4 = targetModel.includes('deepseek-v4') || targetModel.includes('deepseek-r1');
+    const isDeepSeekV4 = targetModel.includes('deepseek-v4');
     const isGLM52 = targetModel.includes('glm-5.2');
     const isMiniMaxM3 = targetModel.includes('minimax-m3');
     const isKimiK3 = targetModel.includes('kimi-k3');
@@ -244,28 +245,23 @@ app.post('/v1/chat/completions', async (req, res) => {
       temperature: temperature ?? 0.7,
       max_tokens: Math.min(max_tokens ?? 10000, MAX_TOKENS_LIMIT),
       stream: stream || false,
-      ...(stream ? { stream_options: { include_usage: true } } : {})
-    };
+      
+      ...(stream ? { stream_options: { include_usage: true } } : {}),
 
-    if (ENABLE_THINKING_MODE) {
-      if (providerName === 'NIM') {
-        // ONLY apply reasoning/thinking flags to supported thinking models on NIM
-        if (isKimiK3) {
-          baseRequest.reasoning_effort = "high";
-          baseRequest.chat_template_kwargs = { enable_thinking: true };
-        } else if (isDeepSeekV4 || isGLM52) {
-          baseRequest.reasoning_effort = "medium";
-          if (isGLM52) {
-            baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
-          }
-        } else if (isMiniMaxM3) {
-          baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };
-        }
-        // Standard NIM models (Llama, Nemotron, Gemma, etc.) intentionally skip thinking parameters here.
-      } else if (providerName === 'OpenRouter') {
-        baseRequest.reasoning = { enabled: true, effort: 'medium' };
-      }
-    }
+      // Only pass thinking/template parameters for NIM reasoning models or OpenRouter parameters if needed
+      ...(ENABLE_THINKING_MODE && providerName === 'NIM' ? {
+        ...(isKimiK3 ? { reasoning_effort: "high" } : {}),
+        ...(isDeepSeekV4 || isGLM52 ? { reasoning_effort: "medium" } : {}),
+        ...(isGLM52 ? { chat_template_kwargs: { enable_thinking: true, thinking: true } } :
+            isMiniMaxM3 ? { chat_template_kwargs: { thinking_mode: "enabled" } } :
+            isKimiK3 ? { chat_template_kwargs: { enable_thinking: true } } :
+            {})
+      } : {}),
+
+      ...(ENABLE_THINKING_MODE && providerName === 'OpenRouter' ? {
+        reasoning: { enabled: true, effort: 'medium' }
+      } : {})
+    };
 
     const response = await callUpstreamModel(baseRequest, targetModel, currentApiBase, currentApiKey);
     upstreamStream = response.data;
@@ -311,32 +307,30 @@ app.post('/v1/chat/completions', async (req, res) => {
             console.log(`  - Prompt Tokens: ${data.usage.prompt_tokens ?? 0}`);
             console.log(`  - Completion Tokens: ${data.usage.completion_tokens ?? 0}`);
             console.log(`  - Total Tokens: ${data.usage.total_tokens ?? 0}`);
+            console.log(`- Total seconds taken ${Math.floor((Date.now() - startTime) / 1000)}`);
           }
 
           const delta = data.choices?.[0]?.delta;
 
           if (delta) {
-            let chunkReasoning = delta.reasoning_content || delta.reasoning;
-            if (!chunkReasoning && delta.reasoning_details && Array.isArray(delta.reasoning_details)) {
-              chunkReasoning = delta.reasoning_details.map(d => d.text || d.summary || '').join('');
-            }
-
             let content = delta.content || '';
+            const reasoning = delta.reasoning_content || delta.reasoning;
 
-            if (SHOW_REASONING && chunkReasoning) {
-              if (!reasoningOpen) {
-                content = `<thinking>\n${chunkReasoning}`;
+            if (SHOW_REASONING) {
+              if (reasoning && !reasoningOpen) {
+                content = `<thinking>\n${reasoning.replace(/\n/g, '\\n')}`;
                 reasoningOpen = true;
-              } else {
-                content = chunkReasoning;
+              } else if (reasoning) {
+                content = reasoning.replace(/\n/g, '\\n');
               }
-            } else if (SHOW_REASONING && reasoningOpen && !chunkReasoning) {
-              content = `\n</thinking>\n\n${content}`;
-              reasoningOpen = false;
+
+              if (delta.content && reasoningOpen) {
+                content += `\n</thinking>\n\n${delta.content}`;
+                reasoningOpen = false;
+              }
             }
 
             delta.content = content;
-            
             delete delta.reasoning_content;
             delete delta.reasoning;
             delete delta.reasoning_details;
@@ -346,6 +340,13 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         } catch (parseErr) {
           console.warn('[STREAM] Invalid JSON line:', line.slice(0, 100));
+          safeWrite(res, `data: ${JSON.stringify({ 
+            error: { 
+              message: 'Upstream sent malformed chunk', 
+              type: 'stream_parse_error',
+              details: line.slice(0, 100)
+            } 
+          })}\n\n`);
         }
       };
 
@@ -354,7 +355,12 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         if (buffer.length > MAX_BUFFER_SIZE) {
           console.error('[STREAM] Buffer overflow, destroying connection');
-          safeWrite(res, `data: ${JSON.stringify({ error: { message: 'Stream buffer overflow', type: 'stream_error' } })}\n\n`);
+          safeWrite(res, `data: ${JSON.stringify({ 
+            error: { 
+              message: 'Stream buffer overflow', 
+              type: 'stream_error' 
+            } 
+          })}\n\n`);
           safeWrite(res, 'data: [DONE]\n\n');
           res.end();
           upstreamStream.destroy();
@@ -372,22 +378,34 @@ app.post('/v1/chat/completions', async (req, res) => {
 
       upstreamStream.on('end', () => {
         buffer += decoder.end();
+
         if (buffer.trim()) {
           for (const line of buffer.split('\n')) {
             processLine(line);
           }
         }
 
-        if (!doneSent) { safeWrite(res, 'data: [DONE]\n\n'); }
+        if (!doneSent) {
+          safeWrite(res, 'data: [DONE]\n\n');
+        }
+
         streamEndedCleanly = true;
-        if (!res.writableEnded) res.end();
+        if (!res.writableEnded) {
+          res.end();
+        }
         cleanup();
       });
 
       upstreamStream.on('error', err => {
         console.error('[STREAM] Upstream error:', err.message);
+        
         if (!res.writableEnded) {
-          safeWrite(res, `data: ${JSON.stringify({ error: { message: 'Stream interrupted', type: 'stream_error' } })}\n\n`);
+          safeWrite(res, `data: ${JSON.stringify({
+            error: {
+              message: 'Stream interrupted by upstream error',
+              type: 'stream_error'
+            }
+          })}`);
           safeWrite(res, 'data: [DONE]\n\n');
           res.end();
         }
@@ -395,9 +413,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
 
       req.on('close', () => {
-        if (!streamEndedCleanly && (req.destroyed || !res.writable)) {
+        const clientGone = req.destroyed || !res.writable;
+        
+        if (!streamEndedCleanly && clientGone) {
           console.warn('[STREAM] Client disconnected prematurely');
         }
+
         if (upstreamStream && !upstreamStream.destroyed && !streamEndedCleanly) {
           upstreamStream.destroy();
         }
@@ -405,12 +426,18 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
 
     } else {
-      const usage = response.data.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+      const usage = response.data.usage || {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0
+      };
 
       if (isMonitoredModel) {
         console.log(`[TOKEN USAGE] Provider: ${providerName} | Model: ${model} (${targetModel})`);
         console.log(`  - Prompt Tokens: ${usage.prompt_tokens}`);
         console.log(`  - Completion Tokens: ${usage.completion_tokens}`);
+        console.log(`  - Total Tokens: ${usage.total_tokens}`);
+        console.log(`- Total seconds taken ${Math.floor((Date.now() - startTime) / 1000)}`);
       }
 
       const openaiResponse = {
@@ -420,26 +447,26 @@ app.post('/v1/chat/completions', async (req, res) => {
         model: model,
         choices: (response.data.choices || []).map((choice, i) => {
           let content = choice.message?.content || '';
-          
           let reasoning = choice.message?.reasoning_content || choice.message?.reasoning;
-          if (!reasoning && choice.message?.reasoning_details && Array.isArray(choice.message.reasoning_details)) {
-            reasoning = choice.message.reasoning_details.map(d => d.text || d.summary || '').join('');
-          }
 
           if (SHOW_REASONING && reasoning) {
             const safeReasoning = reasoning.replace(/\n/g, '\\n');
             content = `<thinking>\n${safeReasoning}\n</thinking>\n\n${content}`;
           }
-          
+
           if (choice.message) {
-             delete choice.message.reasoning_content;
-             delete choice.message.reasoning;
-             delete choice.message.reasoning_details;
+            delete choice.message.reasoning_content;
+            delete choice.message.reasoning;
+            delete choice.message.reasoning_details;
           }
 
           return {
             index: i,
-            message: { role: choice.message?.role || 'assistant', content, tool_calls: choice.message?.tool_calls },
+            message: {
+              role: choice.message?.role || 'assistant',
+              content,
+              tool_calls: choice.message?.tool_calls
+            },
             finish_reason: choice.finish_reason || 'stop'
           };
         }),
@@ -451,23 +478,46 @@ app.post('/v1/chat/completions', async (req, res) => {
 
   } catch (error) {
     console.error('[PROXY] Fatal error:', error.message);
+    console.error('[PROXY] Upstream response:', error.response?.data);
+
     if (!res.headersSent) {
       res.status(error.response?.status || 500).json({
-        error: { message: error.message, type: 'invalid_request_error', code: error.response?.status || 500 }
+        error: {
+          message: error.message,
+          type: 'invalid_request_error',
+          code: error.response?.status || 500
+        }
       });
     } else if (!res.writableEnded) {
-      safeWrite(res, `data: ${JSON.stringify({ error: { message: error.message, type: 'proxy_error' } })}\n\n`);
+      safeWrite(res, `data: ${JSON.stringify({
+        error: {
+          message: error.message,
+          type: 'proxy_error'
+        }
+      })}\n\n`);
       safeWrite(res, 'data: [DONE]\n\n');
       res.end();
     }
-    if (upstreamStream && !upstreamStream.destroyed) upstreamStream.destroy();
+
+    if (upstreamStream && !upstreamStream.destroyed) {
+      upstreamStream.destroy();
+    }
   }
 });
 
 app.use((req, res) => {
-  res.status(404).json({ error: { message: `Endpoint ${req.method} ${req.path} not found`, type: 'invalid_request_error', code: 404 } });
+  res.status(404).json({
+    error: {
+      message: `Endpoint ${req.method} ${req.path} not found`,
+      type: 'invalid_request_error',
+      code: 404
+    }
+  });
 });
+
+// ─── Startup ───────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`[PROXY] Hybrid proxy running on port ${PORT}`);
+  console.log(`[PROXY] Max tokens limit: ${MAX_TOKENS_LIMIT}`);
 });

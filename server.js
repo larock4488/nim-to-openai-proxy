@@ -1,6 +1,6 @@
 // server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
 // Express 5 Compatible
-// Fixes: Strict NIM payload sanitization to prevent 400 errors from extra client keys
+// Fixes: OpenRouter reasoning parsing (reasoning, reasoning_content, reasoning_details), auth bypass
 
 const express = require('express');
 const cors = require('cors');
@@ -25,7 +25,7 @@ const SHOW_REASONING = process.env.SHOW_REASONING === 'true';
 const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true';
 
 const MAX_TOKENS_LIMIT = 65536;
-const REQUEST_TIMEOUT_MS = 540000; // 9 Minutes
+const REQUEST_TIMEOUT_MS = 540000; // 9 Minute
 const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
 
 if (SHOW_REASONING) console.log('[CONFIG] Reasoning display: ENABLED');
@@ -156,7 +156,7 @@ async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '2.2.2' });
+  res.json({ status: 'ok', version: '2.2.3' });
 });
 
 app.get('/v1/models', (req, res) => {
@@ -177,13 +177,14 @@ app.post('/v1/chat/completions', async (req, res) => {
   let upstreamStream = null;
 
   try {
-    const { model, messages, temperature, max_tokens, stream, ...restBody } = req.body;
+    // Note: ...restBody safely packs user settings like temperature, top_p, etc.
+    const { model, messages, temperature, max_tokens, stream, chat_template_kwargs, ...restBody } = req.body;
 
     const targetModel = MODEL_MAPPING[model];
     if (!targetModel) {
       return res.status(400).json({
         error: {
-          message: `Model '${model || 'undefined'}' is not supported. Please select an available model.`,
+          message: `Model '${model || 'undefined'}' is not supported.`,
           type: 'invalid_request_error',
           code: 400
         }
@@ -213,7 +214,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       if (!currentApiKey) {
         return res.status(500).json({
           error: {
-            message: 'OpenRouter API key is not configured on the server.',
+            message: 'OpenRouter API key is not configured.',
             type: 'server_error',
             code: 500
           }
@@ -221,7 +222,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       }
     }
 
-    const isDeepSeekV4 = targetModel.includes('deepseek-v4');
+    const isDeepSeekV4 = targetModel.includes('deepseek-v4') || targetModel.includes('deepseek-r1');
     const isGLM52 = targetModel.includes('glm-5.2');
     const isMiniMaxM3 = targetModel.includes('minimax-m3');
     const isKimiK3 = targetModel.includes('kimi-k3');
@@ -237,8 +238,9 @@ app.post('/v1/chat/completions', async (req, res) => {
       return msg;
     });
 
-    // Build base request parameters safely
+    // baseRequest combines user settings from restBody with required proxy defaults
     const baseRequest = {
+      ...restBody,
       messages: cleanedMessages,
       model: targetModel,
       temperature: temperature ?? 0.7,
@@ -247,29 +249,23 @@ app.post('/v1/chat/completions', async (req, res) => {
       ...(stream ? { stream_options: { include_usage: true } } : {})
     };
 
-    // Forward safe optional parameters from restBody only if they are populated
-    if (restBody.top_p !== undefined) baseRequest.top_p = restBody.top_p;
-    if (restBody.frequency_penalty !== undefined) baseRequest.frequency_penalty = restBody.frequency_penalty;
-    if (restBody.presence_penalty !== undefined) baseRequest.presence_penalty = restBody.presence_penalty;
-    if (restBody.stop !== undefined) baseRequest.stop = restBody.stop;
-
-    // Handle Provider-Specific Thinking / Reasoning Configurations
     if (ENABLE_THINKING_MODE) {
       if (providerName === 'NIM') {
-        if (isKimiK3) {
-          baseRequest.reasoning_effort = "high";
-          baseRequest.chat_template_kwargs = { enable_thinking: true };
-        } else if (isDeepSeekV4 || isGLM52) {
-          baseRequest.reasoning_effort = "medium";
-          if (isGLM52) {
-            baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
-          }
+        if (isKimiK3) baseRequest.reasoning_effort = "high";
+        else if (isDeepSeekV4 || isGLM52) baseRequest.reasoning_effort = "medium";
+
+        if (isGLM52) {
+          baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
         } else if (isMiniMaxM3) {
           baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };
+        } else if (isKimiK3) {
+          baseRequest.chat_template_kwargs = { enable_thinking: true };
+        } else {
+          baseRequest.chat_template_kwargs = { thinking: true };
         }
-        // Standard NIM models (Llama, Nemotron, etc.) receive NO reasoning/template injections.
       } else if (providerName === 'OpenRouter') {
-        baseRequest.reasoning = { enabled: true, effort: 'medium' };
+        // Tells OpenRouter to output reasoning tokens for supported models
+        baseRequest.reasoning = { enabled: true, effort: 'medium' }; // Options: 'max', 'xhigh', 'high', 'medium', 'low', 'minimal'
       }
     }
 
@@ -317,30 +313,35 @@ app.post('/v1/chat/completions', async (req, res) => {
             console.log(`  - Prompt Tokens: ${data.usage.prompt_tokens ?? 0}`);
             console.log(`  - Completion Tokens: ${data.usage.completion_tokens ?? 0}`);
             console.log(`  - Total Tokens: ${data.usage.total_tokens ?? 0}`);
-            console.log(`- Total seconds taken ${Math.floor((Date.now() - startTime) / 1000)}`);
           }
 
           const delta = data.choices?.[0]?.delta;
 
           if (delta) {
+            // Extract reasoning from any provider format
+            let chunkReasoning = delta.reasoning_content || delta.reasoning;
+            if (!chunkReasoning && delta.reasoning_details && Array.isArray(delta.reasoning_details)) {
+              chunkReasoning = delta.reasoning_details.map(d => d.text || d.summary || '').join('');
+            }
+
             let content = delta.content || '';
-            const reasoning = delta.reasoning_content || delta.reasoning;
 
-            if (SHOW_REASONING) {
-              if (reasoning && !reasoningOpen) {
-                content = `<thinking>\n${reasoning.replace(/\n/g, '\\n')}`;
+            if (SHOW_REASONING && chunkReasoning) {
+              if (!reasoningOpen) {
+                content = `<thinking>\n${chunkReasoning}`;
                 reasoningOpen = true;
-              } else if (reasoning) {
-                content = reasoning.replace(/\n/g, '\\n');
+              } else {
+                content = chunkReasoning;
               }
-
-              if (delta.content && reasoningOpen) {
-                content += `\n</thinking>\n\n${delta.content}`;
-                reasoningOpen = false;
-              }
+            } else if (SHOW_REASONING && reasoningOpen && !chunkReasoning) {
+              // Reasoning has finished, close the tag and append normal content
+              content = `\n</thinking>\n\n${content}`;
+              reasoningOpen = false;
             }
 
             delta.content = content;
+            
+            // Clean up upstream fields so clients don't crash on unhandled keys
             delete delta.reasoning_content;
             delete delta.reasoning;
             delete delta.reasoning_details;
@@ -350,13 +351,6 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         } catch (parseErr) {
           console.warn('[STREAM] Invalid JSON line:', line.slice(0, 100));
-          safeWrite(res, `data: ${JSON.stringify({ 
-            error: { 
-              message: 'Upstream sent malformed chunk', 
-              type: 'stream_parse_error',
-              details: line.slice(0, 100)
-            } 
-          })}\n\n`);
         }
       };
 
@@ -365,12 +359,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 
         if (buffer.length > MAX_BUFFER_SIZE) {
           console.error('[STREAM] Buffer overflow, destroying connection');
-          safeWrite(res, `data: ${JSON.stringify({ 
-            error: { 
-              message: 'Stream buffer overflow', 
-              type: 'stream_error' 
-            } 
-          })}\n\n`);
+          safeWrite(res, `data: ${JSON.stringify({ error: { message: 'Stream buffer overflow', type: 'stream_error' } })}\n\n`);
           safeWrite(res, 'data: [DONE]\n\n');
           res.end();
           upstreamStream.destroy();
@@ -388,34 +377,22 @@ app.post('/v1/chat/completions', async (req, res) => {
 
       upstreamStream.on('end', () => {
         buffer += decoder.end();
-
         if (buffer.trim()) {
           for (const line of buffer.split('\n')) {
             processLine(line);
           }
         }
 
-        if (!doneSent) {
-          safeWrite(res, 'data: [DONE]\n\n');
-        }
-
+        if (!doneSent) { safeWrite(res, 'data: [DONE]\n\n'); }
         streamEndedCleanly = true;
-        if (!res.writableEnded) {
-          res.end();
-        }
+        if (!res.writableEnded) res.end();
         cleanup();
       });
 
       upstreamStream.on('error', err => {
         console.error('[STREAM] Upstream error:', err.message);
-        
         if (!res.writableEnded) {
-          safeWrite(res, `data: ${JSON.stringify({
-            error: {
-              message: 'Stream interrupted by upstream error',
-              type: 'stream_error'
-            }
-          })}`);
+          safeWrite(res, `data: ${JSON.stringify({ error: { message: 'Stream interrupted', type: 'stream_error' } })}\n\n`);
           safeWrite(res, 'data: [DONE]\n\n');
           res.end();
         }
@@ -423,12 +400,9 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
 
       req.on('close', () => {
-        const clientGone = req.destroyed || !res.writable;
-        
-        if (!streamEndedCleanly && clientGone) {
+        if (!streamEndedCleanly && (req.destroyed || !res.writable)) {
           console.warn('[STREAM] Client disconnected prematurely');
         }
-
         if (upstreamStream && !upstreamStream.destroyed && !streamEndedCleanly) {
           upstreamStream.destroy();
         }
@@ -436,18 +410,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
 
     } else {
-      const usage = response.data.usage || {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0
-      };
+      const usage = response.data.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
       if (isMonitoredModel) {
         console.log(`[TOKEN USAGE] Provider: ${providerName} | Model: ${model} (${targetModel})`);
         console.log(`  - Prompt Tokens: ${usage.prompt_tokens}`);
         console.log(`  - Completion Tokens: ${usage.completion_tokens}`);
-        console.log(`  - Total Tokens: ${usage.total_tokens}`);
-        console.log(`- Total seconds taken ${Math.floor((Date.now() - startTime) / 1000)}`);
       }
 
       const openaiResponse = {
@@ -457,26 +425,26 @@ app.post('/v1/chat/completions', async (req, res) => {
         model: model,
         choices: (response.data.choices || []).map((choice, i) => {
           let content = choice.message?.content || '';
+          
           let reasoning = choice.message?.reasoning_content || choice.message?.reasoning;
+          if (!reasoning && choice.message?.reasoning_details && Array.isArray(choice.message.reasoning_details)) {
+            reasoning = choice.message.reasoning_details.map(d => d.text || d.summary || '').join('');
+          }
 
           if (SHOW_REASONING && reasoning) {
             const safeReasoning = reasoning.replace(/\n/g, '\\n');
             content = `<thinking>\n${safeReasoning}\n</thinking>\n\n${content}`;
           }
-
+          
           if (choice.message) {
-            delete choice.message.reasoning_content;
-            delete choice.message.reasoning;
-            delete choice.message.reasoning_details;
+             delete choice.message.reasoning_content;
+             delete choice.message.reasoning;
+             delete choice.message.reasoning_details;
           }
 
           return {
             index: i,
-            message: {
-              role: choice.message?.role || 'assistant',
-              content,
-              tool_calls: choice.message?.tool_calls
-            },
+            message: { role: choice.message?.role || 'assistant', content, tool_calls: choice.message?.tool_calls },
             finish_reason: choice.finish_reason || 'stop'
           };
         }),
@@ -488,46 +456,23 @@ app.post('/v1/chat/completions', async (req, res) => {
 
   } catch (error) {
     console.error('[PROXY] Fatal error:', error.message);
-    console.error('[PROXY] Upstream response:', error.response?.data);
-
     if (!res.headersSent) {
       res.status(error.response?.status || 500).json({
-        error: {
-          message: error.message,
-          type: 'invalid_request_error',
-          code: error.response?.status || 500
-        }
+        error: { message: error.message, type: 'invalid_request_error', code: error.response?.status || 500 }
       });
     } else if (!res.writableEnded) {
-      safeWrite(res, `data: ${JSON.stringify({
-        error: {
-          message: error.message,
-          type: 'proxy_error'
-        }
-      })}`);
+      safeWrite(res, `data: ${JSON.stringify({ error: { message: error.message, type: 'proxy_error' } })}\n\n`);
       safeWrite(res, 'data: [DONE]\n\n');
       res.end();
     }
-
-    if (upstreamStream && !upstreamStream.destroyed) {
-      upstreamStream.destroy();
-    }
+    if (upstreamStream && !upstreamStream.destroyed) upstreamStream.destroy();
   }
 });
 
 app.use((req, res) => {
-  res.status(404).json({
-    error: {
-      message: `Endpoint ${req.method} ${req.path} not found`,
-      type: 'invalid_request_error',
-      code: 404
-    }
-  });
+  res.status(404).json({ error: { message: `Endpoint ${req.method} ${req.path} not found`, type: 'invalid_request_error', code: 404 } });
 });
-
-// ─── Startup ───────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`[PROXY] Hybrid proxy running on port ${PORT}`);
-  console.log(`[PROXY] Max tokens limit: ${MAX_TOKENS_LIMIT}`);
 });

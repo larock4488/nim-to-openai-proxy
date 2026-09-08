@@ -213,7 +213,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       }
     }
 
-    const isDeepSeekV4 = targetModel.includes('deepseek-v4') || targetModel.includes('deepseek-r1');
+    const isDeepSeekV4 = targetModel.includes('deepseek-v4');
     const isGLM52 = targetModel.includes('glm-5.2');
     const isMiniMaxM3 = targetModel.includes('minimax-m3');
     const isKimiK3 = targetModel.includes('kimi-k3');
@@ -234,7 +234,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       ...restBody,
       messages: cleanedMessages,
       model: targetModel,
-      temperature: temperature ?? 0.7,
+      temperature: temperature ?? 1,
       max_tokens: Math.min(max_tokens ?? 10000, MAX_TOKENS_LIMIT),
       stream: stream || false,
       ...(stream ? { stream_options: { include_usage: true } } : {})
@@ -254,7 +254,6 @@ app.post('/v1/chat/completions', async (req, res) => {
           baseRequest.chat_template_kwargs = { thinking: true };
         }
       } else if (providerName === 'OpenRouter') {
-        // Tells OpenRouter to output reasoning tokens for supported models
         baseRequest.reasoning = { enabled: true, effort: 'medium' }; // Options: 'max', 'xhigh', 'high', 'medium', 'low', 'minimal'
       }
     }
@@ -303,6 +302,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             console.log(`  - Prompt Tokens: ${data.usage.prompt_tokens ?? 0}`);
             console.log(`  - Completion Tokens: ${data.usage.completion_tokens ?? 0}`);
             console.log(`  - Total Tokens: ${data.usage.total_tokens ?? 0}`);
+            console.log(`  - Total seconds taken ${Math.floor((Date.now() - startTime) / 1000)}`);
           }
 
           const delta = data.choices?.[0]?.delta;
@@ -406,6 +406,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         console.log(`[TOKEN USAGE] Provider: ${providerName} | Model: ${model} (${targetModel})`);
         console.log(`  - Prompt Tokens: ${usage.prompt_tokens}`);
         console.log(`  - Completion Tokens: ${usage.completion_tokens}`);
+        console.log(`  - Total seconds taken ${Math.floor((Date.now() - startTime) / 1000)}`);
       }
 
       const openaiResponse = {

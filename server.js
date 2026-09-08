@@ -1,6 +1,6 @@
 // server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
 // Express 5 Compatible
-// Fixes: Full OpenRouter model prefix routing + working NIM thinking layout
+// Fixes: Strict NIM payload sanitization to prevent 400 errors from extra client keys
 
 const express = require('express');
 const cors = require('cors');
@@ -25,7 +25,7 @@ const SHOW_REASONING = process.env.SHOW_REASONING === 'true';
 const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true';
 
 const MAX_TOKENS_LIMIT = 65536;
-const REQUEST_TIMEOUT_MS = 540000; // 9 Minute
+const REQUEST_TIMEOUT_MS = 540000; // 9 Minutes
 const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
 
 if (SHOW_REASONING) console.log('[CONFIG] Reasoning display: ENABLED');
@@ -156,7 +156,7 @@ async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '2.2.1' });
+  res.json({ status: 'ok', version: '2.2.2' });
 });
 
 app.get('/v1/models', (req, res) => {
@@ -190,7 +190,6 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
     }
 
-    // Dynamic routing logic: NIM vs OpenRouter (Fixed to catch all openrouter prefixes)
     let currentApiBase = NIM_API_BASE;
     let currentApiKey = NIM_API_KEY;
     let providerName = 'NIM';
@@ -238,30 +237,41 @@ app.post('/v1/chat/completions', async (req, res) => {
       return msg;
     });
 
+    // Build base request parameters safely
     const baseRequest = {
-      ...restBody,
       messages: cleanedMessages,
       model: targetModel,
       temperature: temperature ?? 0.7,
       max_tokens: Math.min(max_tokens ?? 10000, MAX_TOKENS_LIMIT),
       stream: stream || false,
-      
-      ...(stream ? { stream_options: { include_usage: true } } : {}),
-
-      // Only pass thinking/template parameters for NIM reasoning models or OpenRouter parameters if needed
-      ...(ENABLE_THINKING_MODE && providerName === 'NIM' ? {
-        ...(isKimiK3 ? { reasoning_effort: "high" } : {}),
-        ...(isDeepSeekV4 || isGLM52 ? { reasoning_effort: "medium" } : {}),
-        ...(isGLM52 ? { chat_template_kwargs: { enable_thinking: true, thinking: true } } :
-            isMiniMaxM3 ? { chat_template_kwargs: { thinking_mode: "enabled" } } :
-            isKimiK3 ? { chat_template_kwargs: { enable_thinking: true } } :
-            {})
-      } : {}),
-
-      ...(ENABLE_THINKING_MODE && providerName === 'OpenRouter' ? {
-        reasoning: { enabled: true, effort: 'medium' }
-      } : {})
+      ...(stream ? { stream_options: { include_usage: true } } : {})
     };
+
+    // Forward safe optional parameters from restBody only if they are populated
+    if (restBody.top_p !== undefined) baseRequest.top_p = restBody.top_p;
+    if (restBody.frequency_penalty !== undefined) baseRequest.frequency_penalty = restBody.frequency_penalty;
+    if (restBody.presence_penalty !== undefined) baseRequest.presence_penalty = restBody.presence_penalty;
+    if (restBody.stop !== undefined) baseRequest.stop = restBody.stop;
+
+    // Handle Provider-Specific Thinking / Reasoning Configurations
+    if (ENABLE_THINKING_MODE) {
+      if (providerName === 'NIM') {
+        if (isKimiK3) {
+          baseRequest.reasoning_effort = "high";
+          baseRequest.chat_template_kwargs = { enable_thinking: true };
+        } else if (isDeepSeekV4 || isGLM52) {
+          baseRequest.reasoning_effort = "medium";
+          if (isGLM52) {
+            baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
+          }
+        } else if (isMiniMaxM3) {
+          baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };
+        }
+        // Standard NIM models (Llama, Nemotron, etc.) receive NO reasoning/template injections.
+      } else if (providerName === 'OpenRouter') {
+        baseRequest.reasoning = { enabled: true, effort: 'medium' };
+      }
+    }
 
     const response = await callUpstreamModel(baseRequest, targetModel, currentApiBase, currentApiKey);
     upstreamStream = response.data;
@@ -494,7 +504,7 @@ app.post('/v1/chat/completions', async (req, res) => {
           message: error.message,
           type: 'proxy_error'
         }
-      })}\n\n`);
+      })}`);
       safeWrite(res, 'data: [DONE]\n\n');
       res.end();
     }

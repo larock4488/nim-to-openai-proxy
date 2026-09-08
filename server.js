@@ -1,6 +1,6 @@
 // server.js — Robust Hybrid OpenAI ↔ NIM / OpenRouter Proxy
 // Express 5 Compatible
-// Fixes: OpenRouter reasoning parsing (reasoning, reasoning_content, reasoning_details), auth bypass
+// Fixes: OpenRouter reasoning parsing & conditional thinking flags for NIM
 
 const express = require('express');
 const cors = require('cors');
@@ -25,7 +25,7 @@ const SHOW_REASONING = process.env.SHOW_REASONING === 'true';
 const ENABLE_THINKING_MODE = process.env.ENABLE_THINKING_MODE === 'true';
 
 const MAX_TOKENS_LIMIT = 65536;
-const REQUEST_TIMEOUT_MS = 540000; // 9 Minute
+const REQUEST_TIMEOUT_MS = 540000; // 9 Minutes
 const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB
 
 if (SHOW_REASONING) console.log('[CONFIG] Reasoning display: ENABLED');
@@ -156,7 +156,7 @@ async function callUpstreamModel(baseRequest, model, apiBase, apiKey) {
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '2.2.3' });
+  res.json({ status: 'ok', version: '2.2.4' });
 });
 
 app.get('/v1/models', (req, res) => {
@@ -177,7 +177,6 @@ app.post('/v1/chat/completions', async (req, res) => {
   let upstreamStream = null;
 
   try {
-    // Note: ...restBody safely packs user settings like temperature, top_p, etc.
     const { model, messages, temperature, max_tokens, stream, chat_template_kwargs, ...restBody } = req.body;
 
     const targetModel = MODEL_MAPPING[model];
@@ -238,7 +237,6 @@ app.post('/v1/chat/completions', async (req, res) => {
       return msg;
     });
 
-    // baseRequest combines user settings from restBody with required proxy defaults
     const baseRequest = {
       ...restBody,
       messages: cleanedMessages,
@@ -251,21 +249,21 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     if (ENABLE_THINKING_MODE) {
       if (providerName === 'NIM') {
-        if (isKimiK3) baseRequest.reasoning_effort = "high";
-        else if (isDeepSeekV4 || isGLM52) baseRequest.reasoning_effort = "medium";
-
-        if (isGLM52) {
-          baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
+        // ONLY apply reasoning/thinking flags to supported thinking models on NIM
+        if (isKimiK3) {
+          baseRequest.reasoning_effort = "high";
+          baseRequest.chat_template_kwargs = { enable_thinking: true };
+        } else if (isDeepSeekV4 || isGLM52) {
+          baseRequest.reasoning_effort = "medium";
+          if (isGLM52) {
+            baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
+          }
         } else if (isMiniMaxM3) {
           baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };
-        } else if (isKimiK3) {
-          baseRequest.chat_template_kwargs = { enable_thinking: true };
-        } else {
-          baseRequest.chat_template_kwargs = { thinking: true };
         }
+        // Standard NIM models (Llama, Nemotron, Gemma, etc.) intentionally skip thinking parameters here.
       } else if (providerName === 'OpenRouter') {
-        // Tells OpenRouter to output reasoning tokens for supported models
-        baseRequest.reasoning = { enabled: true, effort: 'medium' }; // Options: 'max', 'xhigh', 'high', 'medium', 'low', 'minimal'
+        baseRequest.reasoning = { enabled: true, effort: 'medium' };
       }
     }
 
@@ -318,7 +316,6 @@ app.post('/v1/chat/completions', async (req, res) => {
           const delta = data.choices?.[0]?.delta;
 
           if (delta) {
-            // Extract reasoning from any provider format
             let chunkReasoning = delta.reasoning_content || delta.reasoning;
             if (!chunkReasoning && delta.reasoning_details && Array.isArray(delta.reasoning_details)) {
               chunkReasoning = delta.reasoning_details.map(d => d.text || d.summary || '').join('');
@@ -334,14 +331,12 @@ app.post('/v1/chat/completions', async (req, res) => {
                 content = chunkReasoning;
               }
             } else if (SHOW_REASONING && reasoningOpen && !chunkReasoning) {
-              // Reasoning has finished, close the tag and append normal content
               content = `\n</thinking>\n\n${content}`;
               reasoningOpen = false;
             }
 
             delta.content = content;
             
-            // Clean up upstream fields so clients don't crash on unhandled keys
             delete delta.reasoning_content;
             delete delta.reasoning;
             delete delta.reasoning_details;

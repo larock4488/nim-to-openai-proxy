@@ -249,7 +249,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         
 
         if (isGLM5) {
-          baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
+          baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true, reasoning_effort: "high" };
         } else if (isMiniMaxM3) {
           baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };
         } else if (isKimiK3) {

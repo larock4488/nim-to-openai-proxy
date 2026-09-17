@@ -216,10 +216,10 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 
     const isDeepSeekV4 = targetModel.includes('deepseek-v4');
-    const isGLM52 = targetModel.includes('glm-5.2');
+    const isGLM5 = targetModel.includes('glm-5');
     const isMiniMaxM3 = targetModel.includes('minimax-m3');
     const isKimiK3 = targetModel.includes('kimi-k3');
-    const isMonitoredModel = isDeepSeekV4 || isGLM52 || isMiniMaxM3 || isKimiK3;
+    const isMonitoredModel = isDeepSeekV4 || isGLM5 || isMiniMaxM3 || isKimiK3;
 
     const cleanedMessages = messages.map(msg => {
       if (msg.role === 'assistant' && typeof msg.content === 'string') {
@@ -245,10 +245,10 @@ app.post('/v1/chat/completions', async (req, res) => {
     if (ENABLE_THINKING_MODE) {
       if (providerName === 'NIM') {
         if (isDeepSeekV4) { baseRequest.reasoning_effort = "medium";
-        }else if (isGLM52) baseRequest.reasoning_effort = "high";
+        }else if (isGLM5) baseRequest.reasoning_effort = "high";
         
 
-        if (isGLM52) {
+        if (isGLM5) {
           baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };
         } else if (isMiniMaxM3) {
           baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };

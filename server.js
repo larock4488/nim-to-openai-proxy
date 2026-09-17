@@ -244,7 +244,9 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     if (ENABLE_THINKING_MODE) {
       if (providerName === 'NIM') {
-        if (isDeepSeekV4 || isGLM52) baseRequest.reasoning_effort = "medium";
+        if (isDeepSeekV4) { baseRequest.reasoning_effort = "medium";
+        }else if (isGLM52) baseRequest.reasoning_effort = "high";
+        
 
         if (isGLM52) {
           baseRequest.chat_template_kwargs = { enable_thinking: true, thinking: true };

@@ -253,7 +253,8 @@ app.post('/v1/chat/completions', async (req, res) => {
         } else if (isMiniMaxM3) {
           baseRequest.chat_template_kwargs = { thinking_mode: "enabled" };
         } else if (isKimiK3) {
-          baseRequest.chat_template_kwargs = { thinking: true, clear_thinking: true, do_sample: true, enable_thinking: true, reasoning_effort: "high"}
+          baseRequest.chat_template_kwargs = { thinking: true};
+          baseRequest.reasoning_effort = "high";
         } else {
           baseRequest.chat_template_kwargs = { thinking: true };
         }

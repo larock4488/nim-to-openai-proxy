@@ -319,22 +319,33 @@ app.post('/v1/chat/completions', async (req, res) => {
               chunkReasoning = delta.reasoning_details.map(d => d.text || d.summary || '').join('');
             }
 
-            let content = delta.content || '';
+            let standardContent = delta.content || '';
 
-            if (SHOW_REASONING && chunkReasoning) {
-              if (!reasoningOpen) {
-                content = `<thinking>\n${chunkReasoning}`;
-                reasoningOpen = true;
-              } else {
-                content = chunkReasoning;
+            if (SHOW_REASONING) {
+              let mergedContent = '';
+              
+              // 1. Append reasoning if present
+              if (chunkReasoning) {
+                if (!reasoningOpen) {
+                  mergedContent += `<thinking>\n`;
+                  reasoningOpen = true;
+                }
+                mergedContent += chunkReasoning;
               }
-            } else if (SHOW_REASONING && reasoningOpen && !chunkReasoning) {
-              // Reasoning has finished, close the tag and append normal content
-              content = `\n</thinking>\n\n${content}`;
-              reasoningOpen = false;
-            }
+              
+              // 2. Close the thinking tag if standard content begins, OR if reasoning explicitly stops
+              if (reasoningOpen && (standardContent || !chunkReasoning)) {
+                mergedContent += `\n</thinking>\n\n`;
+                reasoningOpen = false;
+              }
 
-            delta.content = content;
+              // 3. Append standard content safely
+              mergedContent += standardContent;
+              
+              delta.content = mergedContent;
+            } else {
+              delta.content = standardContent;
+            }
             
             // Clean up upstream fields so clients don't crash on unhandled keys
             delete delta.reasoning_content;

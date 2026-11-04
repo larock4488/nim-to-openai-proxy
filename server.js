@@ -56,20 +56,17 @@ const MODEL_MAPPING = {
   'nemotron-3-ultra-550b-a55b': 'nvidia/nemotron-3-ultra-550b-a55b',
   'nemotron-3.5-lightning-30b-a3b': 'nvidia/nemotron-3.5-lightning-30b-a3b',
   'kimi-k3': 'moonshotai/kimi-k3',
-  'deepseek-v4-pro': 'deepseek-ai/deepseek-v4-pro',
-  'deepseek-v4-flash': 'deepseek-ai/deepseek-v4-flash',
-  'deepseek-v4-flash-0731': 'deepseek-ai/deepseek-v4-flash-0731',
-  'deepseek-v4-pro-0813': 'deepseek-ai/deepseek-v4-pro-0813',
+  'deepseek-v4.1-flash': 'deepseek-ai/deepseek-v4.1-flash',
   'glm-5.3': 'z-ai/glm-5.3',
   'glm-5.3-flash': 'z-ai/glm-5.3-flash',
   'gpt-oss-120b': 'openai/gpt-oss-120b',
   'llama-3.3-70b-instruct': 'meta/llama-3.3-70b-instruct',
-  'glm-5.2': 'z-ai/glm-5.2',
   'openrouter/glm-5.2': 'z-ai/glm-5.2:free',
   'openrouter/minimax-m3': 'minimax/minimax-m3:free',
   'mistral-nemotron': 'mistralai/mistral-nemotron',
   'gemma-4-31b-it': 'google/gemma-4-31b-it',
-  'minimax-m3': 'minimaxai/minimax-m3',
+  'minimax-m3.1-flash': 'minimaxai/minimax-m3.1-flash',
+  'mistral-large-4': 'mistralai/mistral-large-4-1t-a52b',
   'step-3.7-flash': 'stepfun-ai/step-3.7-flash'
 };
 
